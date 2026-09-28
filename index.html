@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sightread · shape-note practice</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Noto+Music&display=swap" rel="stylesheet" />
+  </head>
+  <body data-phase="idle">
+    <div id="app">
+      <header>
+        <div>
+          <h1>Sightread</h1>
+          <p class="subtitle">A singing school for four-shape notation</p>
+        </div>
+        <label class="level-pick">Level <select id="level-select"></select></label>
+      </header>
+
+      <section class="lesson">
+        <h2 id="lesson-title"></h2>
+        <p id="lesson-blurb"></p>
+        <p id="meta" class="muted"></p>
+      </section>
+
+      <section class="stage">
+        <div id="score-wrap"></div>
+        <div class="hud">
+          <div id="hand" aria-hidden="true"></div>
+          <div id="status" role="status"></div>
+        </div>
+      </section>
+
+      <div id="controls"></div>
+      <p id="teacher" aria-live="polite"></p>
+
+      <section class="panels">
+        <div class="panel" id="progress-panel"></div>
+        <div class="panel" id="stats-panel"></div>
+        <div class="panel">
+          <h3>Settings</h3>
+          <label><input type="checkbox" id="set-metronome" /> Metronome click</label>
+          <label><input type="checkbox" id="set-guide" /> Play the notes while I sing <span class="muted">(practice, not counted)</span></label>
+          <label><input type="checkbox" id="set-lowOctave" /> Sound an octave lower <span class="muted">(for lower voices)</span></label>
+          <h3>The shapes</h3>
+          <div class="legend">
+            <span><svg viewBox="-9 -7 18 14"><polygon points="-7.5,5.5 7.5,-5.5 7.5,5.5" /></svg>fa</span>
+            <span><svg viewBox="-9 -7 18 14"><ellipse rx="7.5" ry="5.5" transform="rotate(-20)" /></svg>sol</span>
+            <span><svg viewBox="-9 -7 18 14"><rect x="-7" y="-5" width="14" height="10" /></svg>la</span>
+            <span><svg viewBox="-9 -7 18 14"><polygon points="-7.5,0 0,-6.5 7.5,0 0,6.5" /></svg>mi</span>
+          </div>
+          <p class="muted">Major: fa sol la fa sol la mi fa. Minor: la mi fa sol la fa sol la.</p>
+          <button id="reset" class="subtle">Reset progress</button>
+        </div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
