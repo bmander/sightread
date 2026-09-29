@@ -2,8 +2,10 @@ import './style.css';
 import { Sound } from './audio';
 import { applyResult, effectiveTempo, LEVELS, PROMOTE_AT, WINDOW, weakestInterval, weightingFor, type Progress } from './curriculum';
 import { generateExercise, makeRng, type Exercise } from './generator';
-import { INTERVAL_NAMES, midiOf, mod, SHAPES } from './music';
-import { renderScore, type Score } from './render';
+import { Mic, type MicReading } from './mic';
+import { degreeOfMidi, INTERVAL_NAMES, midiOf, mod, SHAPES, shapeOf } from './music';
+import { PitchTrace, renderScore, type Score } from './render';
+import { judgeNote, scoreExercise, tuningOffset, type NoteVerdict, type PitchFrame } from './scoring';
 import { clearProgress, loadProgress, loadSettings, saveProgress, saveSettings, type Settings } from './store';
 
 type Phase = 'idle' | 'running' | 'review';
@@ -29,8 +31,16 @@ class App {
   run: { exStart: number; spb: number; introEnd: number; playheadX: number; countIn: number } | null = null;
   playbackTimer = 0;
   seed = Date.now() >>> 0;
+  mic = new Mic();
+  /** Pitches heard during the current run, in exercise beats. */
+  frames: PitchFrame[] = [];
+  trace: PitchTrace | null = null;
+  /** Microphone grading for the last run, if it was listened to. */
+  verdicts: NoteVerdict[] | null = null;
+  offsetCents = 0;
 
   constructor() {
+    this.mic.onReading = this.onMicReading;
     this.bindSettings();
     this.bindKeys();
     $('#level-select').addEventListener('change', (e) => {
@@ -67,6 +77,8 @@ class App {
     this.exercise = generateExercise(this.level, makeRng(this.seed++), weightingFor(this.progress));
     this.tempo = effectiveTempo(this.progress);
     this.scored = true;
+    this.frames = [];
+    this.verdicts = null;
     this.setPhase('idle');
   }
 
@@ -84,11 +96,15 @@ class App {
       phase === 'idle'
         ? 'Look it over, then press Start (space).'
         : phase === 'review'
-          ? 'Click any notes you missed, then Submit (enter). Use Play back (P) to check yourself.'
+          ? this.verdicts
+            ? `Graded by ear${Math.abs(this.offsetCents) >= 10 ? ` (allowing for your key being ${Math.abs(Math.round(this.offsetCents))}¢ ${this.offsetCents > 0 ? 'sharp' : 'flat'})` : ''}. Click any note the microphone got wrong, then Submit (enter).`
+            : 'Click any notes you missed, then Submit (enter). Use Play back (P) to check yourself.'
           : '';
   }
 
-  start() {
+  async start() {
+    if (this.settings.mic && !this.mic.active) await this.enableMic();
+    if (this.phase !== 'idle') return;
     const sound = this.sound;
     sound.reset();
     const ex = this.exercise;
@@ -112,7 +128,10 @@ class App {
     }
 
     this.run = { exStart, spb, introEnd, countIn, playheadX: this.score.headerWidth + 90 };
+    this.frames = [];
+    this.verdicts = null;
     this.setPhase('running');
+    this.trace = this.mic.active ? new PitchTrace(this.score, ex) : null;
     requestAnimationFrame(this.frame);
   }
 
@@ -126,8 +145,15 @@ class App {
     this.scrollTo(Math.max(beat, -run.countIn));
     ex.notes.forEach((n, i) => {
       const g = this.score.notes[i];
-      g.classList.toggle('active', beat >= n.start && beat < n.start + n.beats);
-      g.classList.toggle('passed', beat >= n.start + n.beats);
+      const done = beat >= n.start + n.beats;
+      g.classList.toggle('active', beat >= n.start && !done);
+      if (done && !g.classList.contains('passed')) {
+        g.classList.add('passed');
+        if (this.trace) {
+          const v = judgeNote(ex, n, this.frames, tuningOffset(ex, this.frames));
+          g.classList.add(v.correct ? 'hit' : 'miss');
+        }
+      }
     });
 
     const hand = $('#hand');
@@ -156,7 +182,16 @@ class App {
 
   enterReview() {
     this.run = null;
-    this.missed = this.exercise.notes.map(() => false);
+    if (this.trace) {
+      const { verdicts, offsetCents } = scoreExercise(this.exercise, this.frames);
+      this.verdicts = verdicts;
+      this.offsetCents = offsetCents;
+      this.missed = verdicts.map((v) => !v.correct);
+    } else {
+      this.verdicts = null;
+      this.missed = this.exercise.notes.map(() => false);
+    }
+    this.trace = null;
     this.setPhase('review');
   }
 
@@ -226,10 +261,24 @@ class App {
       this.score = renderScore(ex, { pxPerBeat: ppb, width: w, showSyllables });
       this.score.track.setAttribute('transform', `translate(${this.score.headerWidth + 20},0)`);
       this.score.notes.forEach((g, i) => g.classList.toggle('missed', this.missed[i]));
+      if (this.verdicts) {
+        const trace = new PitchTrace(this.score, ex);
+        for (const f of this.frames) trace.add(f.beat, f.midi);
+        this.verdicts.forEach((v, i) => {
+          const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+          t.textContent = v.cents === null ? 'not heard' : `${v.cents > 0 ? '+' : ''}${Math.round(v.cents)}¢`;
+          this.score.notes[i].appendChild(t);
+        });
+      }
     } else {
       const probe = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, showSyllables });
       this.score = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, showSyllables, playheadX: probe.headerWidth + 90 });
       this.scrollTo(-ex.meter);
+      if (this.phase === 'running' && this.trace) {
+        // Resized mid-run: rebuild the trace on the new score.
+        this.trace = new PitchTrace(this.score, ex);
+        for (const f of this.frames) this.trace.add(f.beat, f.midi);
+      }
     }
     wrap.replaceChildren(this.score.svg);
   }
@@ -250,7 +299,7 @@ class App {
       c.appendChild(b);
     };
     if (this.phase === 'idle') {
-      btn('Start', 'space', () => this.start(), true);
+      btn('Start', 'space', () => void this.start(), true);
       btn('New exercise', 'N', () => this.newExercise());
     } else if (this.phase === 'running') {
       btn('Stop', 'esc', () => this.retry());
@@ -332,6 +381,55 @@ class App {
       : `<h3>What you're singing</h3><p class="muted">Accuracy by interval and shape will show up here as you go.</p>`;
   }
 
+  // ---- microphone ---------------------------------------------------------
+
+  async enableMic(): Promise<boolean> {
+    try {
+      await this.mic.start(this.sound.context);
+    } catch (err) {
+      this.settings.mic = false;
+      saveSettings(this.settings);
+      $<HTMLInputElement>('#set-mic').checked = false;
+      this.teacher(`Couldn't open the microphone (${(err as Error).message || err}). Sing-it mode is off; you can grade yourself instead.`);
+      this.updateMicReadout(null);
+      return false;
+    }
+    return true;
+  }
+
+  onMicReading = (reading: MicReading) => {
+    const run = this.run;
+    if (run && this.phase === 'running' && this.trace) {
+      const beat = (reading.time - run.exStart) / run.spb;
+      if (beat >= -0.5 && beat <= this.exercise.totalBeats + 0.25) {
+        this.frames.push({ beat, midi: reading.midi });
+        this.trace.add(beat, reading.midi);
+      }
+    }
+    this.updateMicReadout(reading.midi);
+  };
+
+  /** Live "what am I singing" readout, relative to the current key. */
+  updateMicReadout(midi: number | null) {
+    const el = $('#mic-readout');
+    if (!this.settings.mic) {
+      el.textContent = '';
+      return;
+    }
+    if (!this.mic.active) {
+      el.textContent = '🎤 starts with Start';
+      return;
+    }
+    if (midi === null) {
+      el.textContent = '🎤 …';
+      return;
+    }
+    const key = this.exercise.key;
+    const d = Math.round(degreeOfMidi(key, midi));
+    const cents = Math.round(100 * (midi - midiOf(key, d)));
+    el.textContent = `🎤 ${shapeOf(d, key.mode)} ${cents >= 0 ? '+' : '−'}${Math.abs(cents)}¢`;
+  }
+
   teacher(msg: string, change: 'promote' | 'demote' | 'stay' = 'stay') {
     const t = $('#teacher');
     t.textContent = msg;
@@ -349,6 +447,19 @@ class App {
         saveSettings(this.settings);
       });
     }
+    const micBox = $<HTMLInputElement>('#set-mic');
+    micBox.checked = this.settings.mic;
+    micBox.addEventListener('change', async () => {
+      this.settings.mic = micBox.checked;
+      saveSettings(this.settings);
+      if (micBox.checked) {
+        if (await this.enableMic()) this.teacher('Listening. Sing a note to check the microphone hears you. Headphones help keep the metronome out of the mic.');
+      } else {
+        this.mic.stop();
+        this.updateMicReadout(null);
+      }
+    });
+    this.updateMicReadout(null);
     $('#reset').addEventListener('click', () => {
       if (!confirm('Erase all progress and start from level 1?')) return;
       clearProgress();
@@ -367,7 +478,7 @@ class App {
         fn();
       };
       if (this.phase === 'idle') {
-        if (k === ' ') act(() => this.start());
+        if (k === ' ') act(() => void this.start());
         else if (k === 'n') act(() => this.newExercise());
       } else if (this.phase === 'running') {
         if (k === 'escape') act(() => this.retry());
@@ -381,4 +492,6 @@ class App {
   }
 }
 
-new App();
+const app = new App();
+// Handy for poking at state from the console during development.
+if (import.meta.env.DEV) Object.assign(window, { app });

@@ -5,7 +5,8 @@
 // them past a fixed playhead (guitar-hero style) by changing one transform.
 
 import type { Exercise } from './generator';
-import { SIGNATURE_STEPS, shapeOf, staffStepOf, type Shape } from './music';
+import { degreeOfMidi, midiOf, SIGNATURE_STEPS, shapeOf, staffStepOf, type Shape } from './music';
+import { foldToward } from './scoring';
 
 const NS = 'http://www.w3.org/2000/svg';
 const HALF = 6; // vertical distance between adjacent staff steps
@@ -31,6 +32,8 @@ export interface Score {
   svg: SVGSVGElement;
   /** Scrolling content; translate this horizontally to move the music. */
   track: SVGGElement;
+  /** Layer under the notes for the sung-pitch trace. */
+  trace: SVGGElement;
   notes: SVGGElement[];
   headerWidth: number;
   pxPerBeat: number;
@@ -91,6 +94,7 @@ export function renderScore(ex: Exercise, opts: RenderOptions): Score {
   el('line', { x1: endX - 5, x2: endX - 5, y1: yOf(TOP_STEP), y2: yOf(BOTTOM_STEP), class: 'barline' }, track);
   el('rect', { x: endX - 1, y: yOf(TOP_STEP), width: 4, height: yOf(BOTTOM_STEP) - yOf(TOP_STEP), class: 'final-bar' }, track);
 
+  const trace = el('g', { class: 'trace-layer' }, track);
   const notes = ex.notes.map((n, i) => {
     const g = el('g', { class: 'note', 'data-i': i }, track);
     drawNote(g, x(n.start), staffStepOf(ex.key, n.degree), shapeOf(n.degree, ex.key.mode), n.beats);
@@ -105,7 +109,7 @@ export function renderScore(ex: Exercise, opts: RenderOptions): Score {
     el('line', { x1: opts.playheadX, x2: opts.playheadX, y1: 8, y2: HEIGHT - 26, class: 'playhead' }, svg);
   }
 
-  return { svg, track, notes, headerWidth, pxPerBeat };
+  return { svg, track, trace, notes, headerWidth, pxPerBeat };
 }
 
 function drawNote(g: SVGGElement, cx: number, step: number, shape: Shape, beats: number) {
@@ -163,4 +167,37 @@ function drawNote(g: SVGGElement, cx: number, step: number, shape: Shape, beats:
 
 function ledger(g: SVGGElement, cx: number, y: number) {
   el('line', { x1: cx - HW - 4, x2: cx + HW + 4, y1: y, y2: y, class: 'staff-line' }, g);
+}
+
+/**
+ * Draws the singer's pitch as a line on the staff. Each point is folded into
+ * the octave of the note being sung at that moment, so a bass singing the
+ * tenor line an octave down still traces through the noteheads.
+ */
+export class PitchTrace {
+  private line: SVGPolylineElement | null = null;
+  private points = '';
+  private lastBeat = -Infinity;
+
+  constructor(private score: Score, private ex: Exercise) {}
+
+  add(beat: number, midi: number | null): void {
+    if (midi === null) {
+      this.line = null;
+      return;
+    }
+    const { ex } = this;
+    const note = ex.notes.findLast((n) => n.start <= beat) ?? ex.notes[0];
+    const target = midiOf(ex.key, note.degree);
+    const step = staffStepOf(ex.key, degreeOfMidi(ex.key, foldToward(midi, target)));
+    const y = Math.max(4, Math.min(HEIGHT - 30, yOf(step)));
+    const x = beat * this.score.pxPerBeat;
+    if (!this.line || beat - this.lastBeat > 0.2) {
+      this.line = el('polyline', { class: 'trace' }, this.score.trace);
+      this.points = '';
+    }
+    this.points += `${x.toFixed(1)},${y.toFixed(1)} `;
+    this.line.setAttribute('points', this.points);
+    this.lastBeat = beat;
+  }
 }

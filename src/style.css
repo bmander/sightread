@@ -61,7 +61,8 @@ body[data-phase='running'] #score-wrap { overflow: hidden; }
 #hand { font-size: 1.8rem; width: 1.2em; text-align: center; color: var(--accent); }
 #hand.pulse { animation: pulse 0.35s ease-out; }
 @keyframes pulse { from { transform: scale(1.5); } to { transform: scale(1); } }
-#status { color: var(--muted); font-style: italic; }
+#status { color: var(--muted); font-style: italic; flex: 1; }
+#mic-readout { font-variant-numeric: tabular-nums; color: var(--playing); min-width: 7em; text-align: right; }
 
 /* ---- score ---- */
 .score { display: block; }
@@ -86,6 +87,15 @@ body[data-phase='running'] #score-wrap { overflow: hidden; }
 .note.active .head, .note.active .stem { stroke: var(--active); }
 .note.active .head.filled, .note.active .flag, .note.active .dot { fill: var(--active); }
 .note.active .syl { fill: var(--active); font-weight: 600; }
+
+/* Live mic verdicts while singing. */
+.note.passed.hit { opacity: 0.6; }
+.note.hit .head, .note.hit .stem { stroke: var(--good); }
+.note.hit .head.filled, .note.hit .flag, .note.hit .dot { fill: var(--good); }
+.note.miss .head, .note.miss .stem { stroke: var(--miss); }
+.note.miss .head.filled, .note.miss .flag, .note.miss .dot { fill: var(--miss); }
+
+.trace { fill: none; stroke: var(--playing); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; opacity: 0.75; }
 
 body[data-phase='review'] .note { cursor: pointer; }
 body[data-phase='review'] .note:hover .hit { fill: var(--rule); opacity: 0.35; }

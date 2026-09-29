@@ -59,6 +59,17 @@ export function midiOf(key: Key, degree: number): number {
   return key.tonicMidi + 12 * Math.floor(degree / 7) + SEMITONES_BY_DEGREE[key.mode][mod(degree, 7)];
 }
 
+/** Inverse of midiOf, continuous: chromatic pitches land between scale degrees. */
+export function degreeOfMidi(key: Key, midi: number): number {
+  const rel = midi - key.tonicMidi;
+  const octave = Math.floor(rel / 12);
+  const r = rel - 12 * octave;
+  const s = [...SEMITONES_BY_DEGREE[key.mode], 12];
+  let i = 0;
+  while (i < 6 && s[i + 1] <= r) i++;
+  return 7 * octave + i + (r - s[i]) / (s[i + 1] - s[i]);
+}
+
 export function staffStepOf(key: Key, degree: number): number {
   return key.tonicStep + degree;
 }

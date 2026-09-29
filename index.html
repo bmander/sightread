@@ -28,6 +28,7 @@
         <div class="hud">
           <div id="hand" aria-hidden="true"></div>
           <div id="status" role="status"></div>
+          <div id="mic-readout" aria-live="off"></div>
         </div>
       </section>
 
@@ -39,6 +40,7 @@
         <div class="panel" id="stats-panel"></div>
         <div class="panel">
           <h3>Settings</h3>
+          <label><input type="checkbox" id="set-mic" /> Sing-it mode: listen with the microphone <span class="muted">(grades you by ear)</span></label>
           <label><input type="checkbox" id="set-metronome" /> Metronome click</label>
           <label><input type="checkbox" id="set-guide" /> Play the notes while I sing <span class="muted">(practice, not counted)</span></label>
           <label><input type="checkbox" id="set-lowOctave" /> Sound an octave lower <span class="muted">(for lower voices)</span></label>

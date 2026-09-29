@@ -7,9 +7,11 @@ export interface Settings {
   guide: boolean;
   metronome: boolean;
   lowOctave: boolean;
+  /** Sing-it mode: grade by listening through the microphone. */
+  mic: boolean;
 }
 
-const DEFAULT_SETTINGS: Settings = { guide: false, metronome: true, lowOctave: false };
+const DEFAULT_SETTINGS: Settings = { guide: false, metronome: true, lowOctave: false, mic: false };
 
 function read<T>(key: string): Partial<T> | null {
   try {
