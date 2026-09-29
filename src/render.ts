@@ -16,7 +16,7 @@ const BOTTOM_STEP = 30; // E4
 const HW = 7.5; // notehead half-width
 const HH = 5.5; // notehead half-height
 const STEM = 34;
-export const HEIGHT = 172;
+const HEIGHT = 172;
 const SYL_Y = 160;
 
 const yOf = (step: number) => TOP + (TOP_STEP - step) * HALF;
@@ -39,6 +39,9 @@ export interface Score {
   pxPerBeat: number;
 }
 
+/** Width of the fixed clef / key / time-signature header. */
+export const headerWidthOf = (ex: Exercise) => 84 + ex.key.signature.count * 11;
+
 export interface RenderOptions {
   pxPerBeat: number;
   width: number;
@@ -50,8 +53,8 @@ export function renderScore(ex: Exercise, opts: RenderOptions): Score {
   const { pxPerBeat, width } = opts;
   const svg = el('svg', { width, height: HEIGHT, viewBox: `0 0 ${width} ${HEIGHT}`, class: 'score' });
   const sig = ex.key.signature;
-  const tsX = 62 + sig.count * 11;
-  const headerWidth = tsX + 22;
+  const headerWidth = headerWidthOf(ex);
+  const tsX = headerWidth - 22;
 
   // Staff lines span the full width.
   for (let i = 0; i < 5; i++) {
@@ -120,7 +123,7 @@ function drawNote(g: SVGGElement, cx: number, step: number, shape: Shape, beats:
   for (let s = TOP_STEP + 2; s <= step; s += 2) ledger(g, cx, yOf(s));
 
   // Transparent hit area so notes are easy to click when grading.
-  el('rect', { x: cx - 12, y: cy - 40, width: 24, height: 80, class: 'hit' }, g);
+  el('rect', { x: cx - 12, y: cy - 40, width: 24, height: 80, class: 'hit-area' }, g);
 
   const hollow = beats >= 2;
   const up = step < 34; // below the middle line: stem up

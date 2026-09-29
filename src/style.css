@@ -80,7 +80,7 @@ body[data-phase='running'] #score-wrap { overflow: hidden; }
 .note .head.hollow { fill: var(--card); }
 .note .stem { stroke: var(--ink); stroke-width: 1.4; }
 .note .flag, .note .dot { fill: var(--ink); }
-.note .hit { fill: transparent; }
+.note .hit-area { fill: transparent; }
 .note .syl { font-size: 15px; font-style: italic; text-anchor: middle; fill: var(--muted); }
 
 .note.passed { opacity: 0.35; }
@@ -98,7 +98,7 @@ body[data-phase='running'] #score-wrap { overflow: hidden; }
 .trace { fill: none; stroke: var(--playing); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; opacity: 0.75; }
 
 body[data-phase='review'] .note { cursor: pointer; }
-body[data-phase='review'] .note:hover .hit { fill: var(--rule); opacity: 0.35; }
+body[data-phase='review'] .note:hover .hit-area { fill: var(--rule); opacity: 0.35; }
 .note.missed .head, .note.missed .stem { stroke: var(--miss); }
 .note.missed .head.filled, .note.missed .flag, .note.missed .dot { fill: var(--miss); }
 .note.missed .syl { fill: var(--miss); text-decoration: line-through; }

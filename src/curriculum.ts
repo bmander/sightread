@@ -114,13 +114,13 @@ export function freshProgress(): Progress {
 }
 
 export const PROMOTE_AT = 0.9;
-export const DEMOTE_BELOW = 0.5;
+const DEMOTE_BELOW = 0.5;
 export const WINDOW = 3;
 const TEMPO_MIN = 0.8;
 const TEMPO_MAX = 1.25;
 
 /** Miss rate, smoothed toward a 15% prior so a couple of misses don't dominate. */
-export function missRate(t: Tally | undefined): number {
+function missRate(t: Tally | undefined): number {
   const prior = 4;
   return ((t?.miss ?? 0) + prior * 0.15) / ((t?.hit ?? 0) + (t?.miss ?? 0) + prior);
 }

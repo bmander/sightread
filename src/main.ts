@@ -4,7 +4,7 @@ import { applyResult, effectiveTempo, LEVELS, PROMOTE_AT, WINDOW, weakestInterva
 import { generateExercise, makeRng, type Exercise } from './generator';
 import { Mic, type MicReading } from './mic';
 import { degreeOfMidi, INTERVAL_NAMES, midiOf, mod, SHAPES, shapeOf } from './music';
-import { PitchTrace, renderScore, type Score } from './render';
+import { headerWidthOf, PitchTrace, renderScore, type Score } from './render';
 import { judgeNote, scoreExercise, tuningOffset, type NoteVerdict, type PitchFrame } from './scoring';
 import { clearProgress, loadProgress, loadSettings, saveProgress, saveSettings, type Settings } from './store';
 
@@ -13,6 +13,8 @@ type Phase = 'idle' | 'running' | 'review';
 // Sacred Harp beat patterns: the hand goes down, then up.
 const HAND: Record<number, string[]> = { 2: ['↓', '↑'], 3: ['↓', '↓', '↑'], 4: ['↓', '↓', '↑', '↑'] };
 const PX_PER_BEAT = 80;
+/** Distance from the end of the staff header to the playhead while scrolling. */
+const PLAYHEAD_GAP = 90;
 const INTRO_SECONDS = 2.2;
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -28,7 +30,7 @@ class App {
   missed: boolean[] = [];
   /** False once the learner has heard the answer (guide tones, retry). */
   scored = true;
-  run: { exStart: number; spb: number; introEnd: number; playheadX: number; countIn: number } | null = null;
+  run: { exStart: number; spb: number; introEnd: number; countIn: number } | null = null;
   playbackTimer = 0;
   seed = Date.now() >>> 0;
   mic = new Mic();
@@ -72,6 +74,11 @@ class App {
     return LEVELS[this.progress.level];
   }
 
+  /** MIDI pitch to sound for a scale degree, honouring the low-octave setting. */
+  soundingMidi(degree: number): number {
+    return midiOf(this.exercise.key, degree) - (this.settings.lowOctave ? 12 : 0);
+  }
+
   newExercise() {
     this.stopAudio();
     this.exercise = generateExercise(this.level, makeRng(this.seed++), weightingFor(this.progress));
@@ -111,11 +118,10 @@ class App {
     const spb = 60 / this.tempo;
     const t0 = sound.now + 0.15;
     const countIn = ex.meter;
-    const shift = this.settings.lowOctave ? -12 : 0;
 
     // Pitch the key the way a keyer would: tonic, third, fifth, then the chord.
-    [0, 2, 4].forEach((d, i) => sound.tone(midiOf(ex.key, d) + shift, t0 + i * 0.4, 0.4));
-    [0, 2, 4].forEach((d) => sound.tone(midiOf(ex.key, d) + shift, t0 + 1.2, 0.9, 0.12));
+    [0, 2, 4].forEach((d, i) => sound.tone(this.soundingMidi(d), t0 + i * 0.4, 0.4));
+    [0, 2, 4].forEach((d) => sound.tone(this.soundingMidi(d), t0 + 1.2, 0.9, 0.12));
 
     const introEnd = t0 + INTRO_SECONDS;
     const exStart = introEnd + countIn * spb;
@@ -124,10 +130,10 @@ class App {
     }
     if (this.settings.guide) {
       this.scored = false;
-      for (const n of ex.notes) sound.tone(midiOf(ex.key, n.degree) + shift, exStart + n.start * spb, n.beats * spb, 0.16);
+      for (const n of ex.notes) sound.tone(this.soundingMidi(n.degree), exStart + n.start * spb, n.beats * spb, 0.16);
     }
 
-    this.run = { exStart, spb, introEnd, countIn, playheadX: this.score.headerWidth + 90 };
+    this.run = { exStart, spb, introEnd, countIn };
     this.frames = [];
     this.verdicts = null;
     this.setPhase('running');
@@ -226,8 +232,7 @@ class App {
     const ex = this.exercise;
     const spb = 60 / this.tempo;
     const t0 = sound.now + 0.1;
-    const shift = this.settings.lowOctave ? -12 : 0;
-    for (const n of ex.notes) sound.tone(midiOf(ex.key, n.degree) + shift, t0 + n.start * spb, n.beats * spb);
+    for (const n of ex.notes) sound.tone(this.soundingMidi(n.degree), t0 + n.start * spb, n.beats * spb);
 
     const tick = () => {
       const beat = (sound.now - t0) / spb;
@@ -253,17 +258,18 @@ class App {
     const ex = this.exercise;
     const showSyllables = this.level.showSyllables;
 
+    const header = headerWidthOf(ex);
+
     if (this.phase === 'review') {
       // Whole exercise at once, compressed to fit if possible.
-      const header = 90;
-      const ppb = Math.max(40, Math.min(PX_PER_BEAT, (width - header - 30) / ex.totalBeats));
-      const w = Math.max(width, header + ex.totalBeats * ppb + 30);
+      const lead = header + 20;
+      const ppb = Math.max(40, Math.min(PX_PER_BEAT, (width - lead - 30) / ex.totalBeats));
+      const w = Math.max(width, lead + ex.totalBeats * ppb + 30);
       this.score = renderScore(ex, { pxPerBeat: ppb, width: w, showSyllables });
-      this.score.track.setAttribute('transform', `translate(${this.score.headerWidth + 20},0)`);
+      this.score.track.setAttribute('transform', `translate(${lead},0)`);
       this.score.notes.forEach((g, i) => g.classList.toggle('missed', this.missed[i]));
       if (this.verdicts) {
-        const trace = new PitchTrace(this.score, ex);
-        for (const f of this.frames) trace.add(f.beat, f.midi);
+        this.replayTrace();
         this.verdicts.forEach((v, i) => {
           const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
           t.textContent = v.cents === null ? 'not heard' : `${v.cents > 0 ? '+' : ''}${Math.round(v.cents)}¢`;
@@ -271,20 +277,22 @@ class App {
         });
       }
     } else {
-      const probe = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, showSyllables });
-      this.score = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, showSyllables, playheadX: probe.headerWidth + 90 });
+      this.score = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, showSyllables, playheadX: header + PLAYHEAD_GAP });
       this.scrollTo(-ex.meter);
-      if (this.phase === 'running' && this.trace) {
-        // Resized mid-run: rebuild the trace on the new score.
-        this.trace = new PitchTrace(this.score, ex);
-        for (const f of this.frames) this.trace.add(f.beat, f.midi);
-      }
+      if (this.phase === 'running' && this.trace) this.trace = this.replayTrace(); // resized mid-run
     }
     wrap.replaceChildren(this.score.svg);
   }
 
+  /** Draw the pitches heard so far onto the current score. */
+  replayTrace(): PitchTrace {
+    const trace = new PitchTrace(this.score, this.exercise);
+    for (const f of this.frames) trace.add(f.beat, f.midi);
+    return trace;
+  }
+
   scrollTo(beat: number) {
-    const playheadX = this.score.headerWidth + 90;
+    const playheadX = this.score.headerWidth + PLAYHEAD_GAP;
     this.score.track.setAttribute('transform', `translate(${playheadX - beat * this.score.pxPerBeat},0)`);
   }
 

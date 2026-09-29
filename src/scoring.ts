@@ -24,8 +24,8 @@ export interface NoteVerdict {
   voiced: number;
 }
 
-export const TOLERANCE_CENTS = 50;
-export const MAX_OFFSET_CENTS = 60;
+const TOLERANCE_CENTS = 50;
+const MAX_OFFSET_CENTS = 60;
 const MIN_VOICED = 0.3;
 const MIN_IN_TUNE = 0.5;
 

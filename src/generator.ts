@@ -76,7 +76,7 @@ export type IntervalWeighting = (size: number) => number;
 
 const BASE_INTERVAL_WEIGHT: Record<number, number> = { 0: 0.5, 1: 4, 2: 2, 3: 1.2, 4: 1, 5: 0.6, 6: 0.1, 7: 0.5 };
 
-export function generateRhythm(p: GenParams, meter: number, rng: Rng): number[] {
+function generateRhythm(p: GenParams, meter: number, rng: Rng): number[] {
   const durations: number[] = [];
   for (let m = 0; m < p.measures - 1; m++) {
     let pos = 0;
@@ -99,7 +99,7 @@ export function generateRhythm(p: GenParams, meter: number, rng: Rng): number[] 
   return durations;
 }
 
-export function generateDegrees(
+function generateDegrees(
   count: number,
   p: GenParams,
   key: Key,
