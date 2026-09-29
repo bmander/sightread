@@ -1,12 +1,24 @@
 import './style.css';
 import { Sound } from './audio';
-import { applyResult, effectiveTempo, LEVELS, PROMOTE_AT, WINDOW, weakestInterval, weightingFor, type Progress } from './curriculum';
-import { generateExercise, makeRng, type Exercise } from './generator';
+import { makeRng, type Exercise } from './generator';
 import { Mic, type MicReading } from './mic';
-import { degreeOfMidi, INTERVAL_NAMES, midiOf, mod, SHAPES, shapeOf, TONICS } from './music';
+import { degreeOfMidi, midiOf, mod, SHAPES, shapeOf, TONICS } from './music';
 import { headerWidthOf, PitchTrace, renderScore, type Score } from './render';
 import { judgeNote, scoreExercise, tuningOffset, type NoteVerdict, type PitchFrame } from './scoring';
+import { describeSkill, INTERVAL_LABELS, unitName, UNITS } from './skills';
 import { clearProgress, loadProgress, loadSettings, saveProgress, saveSettings, type Settings } from './store';
+import {
+  applyResult,
+  boxOf,
+  INTRODUCE_AT,
+  newestUnit,
+  planLesson,
+  STABLE_BOX,
+  weakestSkill,
+  WINDOW,
+  type Lesson,
+  type Progress,
+} from './teacher';
 
 type Phase = 'idle' | 'running' | 'review';
 
@@ -24,6 +36,7 @@ class App {
   settings: Settings = loadSettings();
   sound = new Sound();
   phase: Phase = 'idle';
+  lesson!: Lesson;
   exercise!: Exercise;
   tempo = 60;
   score!: Score;
@@ -45,14 +58,6 @@ class App {
     this.mic.onReading = this.onMicReading;
     this.bindSettings();
     this.bindKeys();
-    $('#level-select').addEventListener('change', (e) => {
-      this.progress.level = Number((e.target as HTMLSelectElement).value);
-      this.progress.tempoFactor = 1;
-      saveProgress(this.progress);
-      this.teacher(`Level ${this.progress.level + 1}: ${LEVELS[this.progress.level].title}.`);
-      this.newExercise();
-      (e.target as HTMLSelectElement).blur(); // hand the keyboard back to the shortcuts
-    });
     const keySel = $<HTMLSelectElement>('#key-select');
     keySel.replaceChildren(
       new Option('Vary', ''),
@@ -64,7 +69,7 @@ class App {
       const label = TONICS.find((t) => t.pc === this.settings.tonic)?.label;
       this.teacher(label ? `Singing on ${label} from now on, major or minor as the level calls for.` : 'The key will vary from exercise to exercise.');
       this.newExercise();
-      keySel.blur();
+      keySel.blur(); // hand the keyboard back to the shortcuts
     });
     $('#score-wrap').addEventListener('click', (e) => {
       if (this.phase !== 'review') return;
@@ -76,16 +81,14 @@ class App {
       this.updateReviewTally();
     });
     window.addEventListener('resize', () => this.draw());
+    const newest = newestUnit(this.progress);
     this.teacher(
-      this.progress.exercisesSung
-        ? `Welcome back. You're on level ${this.progress.level + 1}: ${LEVELS[this.progress.level].title}.`
-        : 'Welcome to the singing school. Press Start, listen to the key being pitched, then sing each shape as it crosses the line.',
+      this.progress.sung
+        ? `Welcome back. You know ${this.progress.introduced} of ${UNITS.length} pairs; the newest is ${unitName(newest)}.`
+        : 'Welcome to the singing school. Each pair of shapes is always the same interval, so we learn them one pair at a time. ' +
+            'Press Start, listen to the key being pitched, then sing each shape as it crosses the line.',
     );
     this.newExercise();
-  }
-
-  get level() {
-    return LEVELS[this.progress.level];
   }
 
   /** MIDI pitch to sound for a scale degree, honouring the low-octave setting. */
@@ -95,11 +98,9 @@ class App {
 
   newExercise() {
     this.stopAudio();
-    this.exercise = generateExercise(this.level, makeRng(this.seed++), {
-      weighting: weightingFor(this.progress),
-      tonic: this.settings.tonic,
-    });
-    this.tempo = effectiveTempo(this.progress);
+    this.lesson = planLesson(this.progress, makeRng(this.seed++), this.settings.tonic);
+    this.exercise = this.lesson.exercise;
+    this.tempo = this.lesson.tempo;
     this.scored = true;
     this.frames = [];
     this.verdicts = null;
@@ -227,7 +228,7 @@ class App {
     }
     const outcome = applyResult(
       this.progress,
-      this.exercise,
+      this.lesson,
       this.missed.map((m) => !m),
     );
     this.progress = outcome.progress;
@@ -273,7 +274,7 @@ class App {
     const wrap = $('#score-wrap');
     const width = wrap.clientWidth;
     const ex = this.exercise;
-    const showSyllables = this.level.showSyllables;
+    const { syllables, focus } = this.lesson;
 
     const header = headerWidthOf(ex);
 
@@ -282,7 +283,7 @@ class App {
       const lead = header + 20;
       const ppb = Math.max(40, Math.min(PX_PER_BEAT, (width - lead - 30) / ex.totalBeats));
       const w = Math.max(width, lead + ex.totalBeats * ppb + 30);
-      this.score = renderScore(ex, { pxPerBeat: ppb, width: w, showSyllables });
+      this.score = renderScore(ex, { pxPerBeat: ppb, width: w, syllables, focus });
       this.score.track.setAttribute('transform', `translate(${lead},0)`);
       this.score.notes.forEach((g, i) => g.classList.toggle('missed', this.missed[i]));
       if (this.verdicts) {
@@ -294,7 +295,7 @@ class App {
         });
       }
     } else {
-      this.score = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, showSyllables, playheadX: header + PLAYHEAD_GAP });
+      this.score = renderScore(ex, { pxPerBeat: PX_PER_BEAT, width, syllables, focus, playheadX: header + PLAYHEAD_GAP });
       this.scrollTo(-ex.meter);
       if (this.phase === 'running' && this.trace) this.trace = this.replayTrace(); // resized mid-run
     }
@@ -349,62 +350,57 @@ class App {
   }
 
   renderInfo() {
-    const lvl = this.level;
-    $('#lesson-title').textContent = `Level ${this.progress.level + 1} · ${lvl.title}`;
-    $('#lesson-blurb').textContent = lvl.blurb;
+    const { title, blurb } = this.lesson;
+    $('#lesson-title').textContent = title;
+    $('#lesson-blurb').textContent = blurb;
     const ex = this.exercise;
     $('#meta').textContent = `${ex.key.name} · ${ex.meter}/4 · ♩ = ${this.tempo}${this.scored ? '' : ' · practice'}`;
-
-    const sel = $<HTMLSelectElement>('#level-select');
-    sel.replaceChildren(
-      ...LEVELS.slice(0, this.progress.maxLevel + 1).map((l, i) => {
-        const o = document.createElement('option');
-        o.value = String(i);
-        o.textContent = `${i + 1}. ${l.title}`;
-        o.selected = i === this.progress.level;
-        return o;
-      }),
-    );
-    sel.disabled = this.phase === 'running';
+    $('#pairs-count').textContent = `Pairs ${this.progress.introduced} / ${UNITS.length}`;
     $<HTMLSelectElement>('#key-select').disabled = this.phase === 'running';
   }
 
   renderPanels() {
     const p = this.progress;
-    const recent = (p.history[p.level] ?? []).slice(-WINDOW);
+    const recent = p.recent.slice(-WINDOW);
     const bars = Array.from({ length: WINDOW }, (_, i) => {
       const s = recent[i];
       if (s === undefined) return '<span class="bar empty"></span>';
-      return `<span class="bar ${s >= PROMOTE_AT ? 'good' : ''}" style="--h:${Math.max(6, s * 100)}%" title="${Math.round(s * 100)}%"></span>`;
+      return `<span class="bar ${s >= INTRODUCE_AT ? 'good' : ''}" style="--h:${Math.max(6, s * 100)}%" title="${Math.round(s * 100)}%"></span>`;
     }).join('');
+    const learned = (i: number) => [UNITS[i].up, UNITS[i].down].every((s) => boxOf(p, s) >= STABLE_BOX);
+    const newest = newestUnit(p);
     $('#progress-panel').innerHTML = `
       <h3>Progress</h3>
-      <div class="ladder">${LEVELS.map((_, i) => `<span class="rung ${i < p.level ? 'done' : i === p.level ? 'here' : ''}"></span>`).join('')}</div>
-      <div class="recent"><div class="bars">${bars}</div>
-        <p>Last ${WINDOW} at this level. Average ${Math.round(PROMOTE_AT * 100)}% or better to move up.</p></div>
-      <p class="muted">${p.exercisesSung} exercises sung · tempo ×${p.tempoFactor.toFixed(2)}</p>`;
+      <div class="ladder">${UNITS.map((_, i) => `<span class="rung ${i >= p.introduced ? '' : learned(i) ? 'done' : 'here'}"></span>`).join('')}</div>
+      ${
+        p.drillsLeft > 0
+          ? `<p>Drilling the new pair <b>${unitName(newest)}</b>.</p>`
+          : `<div class="recent"><div class="bars">${bars}</div>
+             <p>Get <b>${unitName(newest)}</b> solid and average ${Math.round(INTRODUCE_AT * 100)}% over ${WINDOW} songs to meet the next pair.</p></div>`
+      }
+      <p class="muted">${p.sung} exercises sung · tempo ×${p.tempoFactor.toFixed(2)}</p>`;
 
-    const rows = (entries: [string, { hit: number; miss: number } | undefined][]) =>
-      entries
-        .filter(([, t]) => t && t.hit + t.miss > 0)
-        .map(([name, t]) => {
-          const n = t!.hit + t!.miss;
-          const acc = t!.hit / n;
-          return `<tr><td>${name}</td><td class="meter"><span style="--w:${acc * 100}%" class="${acc < 0.75 ? 'weak' : ''}"></span></td><td>${Math.round(acc * 100)}%</td><td class="muted">${n}</td></tr>`;
-        })
-        .join('');
-    const intervalRows = rows(
-      Object.keys(INTERVAL_NAMES)
-        .map(Number)
-        .map((s) => [INTERVAL_NAMES[s], p.intervals[s]]),
-    );
-    const shapeRows = rows(SHAPES.map((s) => [s, p.shapes[s]]));
-    const weak = weakestInterval(p);
-    $('#stats-panel').innerHTML = intervalRows
-      ? `<h3>What you're singing</h3>
-         <table>${intervalRows}</table><table>${shapeRows}</table>
-         <p class="muted">${weak === null ? 'No weak spots yet, so you get an even mix.' : `The teacher is serving extra ${INTERVAL_NAMES[weak]}.`}</p>`
-      : `<h3>What you're singing</h3><p class="muted">Accuracy by interval and shape will show up here as you go.</p>`;
+    // Each introduced pair with its up and down strength, plus the one coming next.
+    const strength = (s: string, arrow: string) =>
+      `<span class="strength" title="${describeSkill(s)}">${arrow}<i style="--w:${(boxOf(p, s) / 5) * 100}%"></i></span>`;
+    const cards = UNITS.slice(0, Math.min(UNITS.length, p.introduced + 1)).map((u, i) => {
+      const cls = i >= p.introduced ? 'next' : i === p.introduced - 1 ? 'new' : '';
+      const body = i >= p.introduced ? '<span class="int">next</span>' : strength(u.up, '↑') + strength(u.down, '↓');
+      return `<div class="pair ${cls}"><b>${u.lo}–${u.hi}</b><span class="int">${INTERVAL_LABELS[u.semitones]}</span>${body}</div>`;
+    });
+    const shapeRows = SHAPES.filter((s) => p.shapes[s].hit + p.shapes[s].miss > 0)
+      .map((s) => {
+        const t = p.shapes[s];
+        const acc = t.hit / (t.hit + t.miss);
+        return `<tr><td>${s}</td><td class="meter"><span style="--w:${acc * 100}%" class="${acc < 0.75 ? 'weak' : ''}"></span></td><td>${Math.round(acc * 100)}%</td></tr>`;
+      })
+      .join('');
+    const weak = weakestSkill(p);
+    $('#stats-panel').innerHTML = `
+      <h3>Pairs</h3>
+      <div class="pairs">${cards.join('')}</div>
+      ${shapeRows ? `<table>${shapeRows}</table>` : ''}
+      <p class="muted">${weak ? `The teacher is serving extra ${describeSkill(weak)}.` : 'Bars fill as each direction of a pair gets solid.'}</p>`;
   }
 
   // ---- microphone ---------------------------------------------------------
@@ -456,7 +452,7 @@ class App {
     el.textContent = `🎤 ${shapeOf(d, key.mode)} ${cents >= 0 ? '+' : '−'}${Math.abs(cents)}¢`;
   }
 
-  teacher(msg: string, change: 'promote' | 'demote' | 'stay' = 'stay') {
+  teacher(msg: string, change: 'introduce' | 'stay' = 'stay') {
     const t = $('#teacher');
     t.textContent = msg;
     t.dataset.change = change;

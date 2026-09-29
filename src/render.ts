@@ -46,7 +46,10 @@ export const headerWidthOf = (ex: Exercise) => 84 + ex.key.signature.count * ACC
 export interface RenderOptions {
   pxPerBeat: number;
   width: number;
-  showSyllables: boolean;
+  /** Per note: print its syllable underneath. */
+  syllables: boolean[];
+  /** Per note: highlight as part of the pair being learned. */
+  focus?: boolean[];
   playheadX?: number;
 }
 
@@ -100,9 +103,9 @@ export function renderScore(ex: Exercise, opts: RenderOptions): Score {
 
   const trace = el('g', { class: 'trace-layer' }, track);
   const notes = ex.notes.map((n, i) => {
-    const g = el('g', { class: 'note', 'data-i': i }, track);
+    const g = el('g', { class: opts.focus?.[i] ? 'note focus' : 'note', 'data-i': i }, track);
     drawNote(g, x(n.start), staffStepOf(ex.key, n.degree), shapeOf(n.degree, ex.key.mode), n.beats);
-    if (opts.showSyllables) {
+    if (opts.syllables[i]) {
       const t = el('text', { x: x(n.start), y: SYL_Y, class: 'syl' }, g);
       t.textContent = shapeOf(n.degree, ex.key.mode);
     }

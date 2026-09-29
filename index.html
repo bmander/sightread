@@ -15,7 +15,7 @@
           <p class="subtitle">A singing school for four-shape notation</p>
         </div>
         <div class="pickers">
-          <label class="level-pick">Level <select id="level-select"></select></label>
+          <span class="level-pick" id="pairs-count"></span>
           <label class="level-pick" title="The level still decides major or minor">Key <select id="key-select"></select></label>
         </div>
       </header>
@@ -40,7 +40,6 @@
 
       <section class="panels">
         <div class="panel" id="progress-panel"></div>
-        <div class="panel" id="stats-panel"></div>
         <div class="panel">
           <h3>Settings</h3>
           <label><input type="checkbox" id="set-mic" /> Sing-it mode: listen with the microphone <span class="muted">(grades you by ear)</span></label>
@@ -57,6 +56,7 @@
           <p class="muted">Major: fa sol la fa sol la mi fa. Minor: la mi fa sol la fa sol la.</p>
           <button id="reset" class="subtle">Reset progress</button>
         </div>
+        <div class="panel wide" id="stats-panel"></div>
       </section>
     </div>
     <script type="module" src="/src/main.ts"></script>

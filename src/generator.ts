@@ -1,12 +1,14 @@
 // Procedural exercise generator.
 //
 // Rhythm: each measure is filled with rhythm "cells"; the last measure is a
-// single held tonic. Melody: a weighted random walk over scale degrees that
-// favours steps, recovers from leaps, avoids tritones, and is steered so it
-// can always land on the tonic at the end. Interval weights can be scaled by
-// the learner's weaknesses so the teacher serves more of what they miss.
+// single held tonic. Melody: a weighted random walk over scale degrees in
+// which every move must be a shape-pair skill the learner has been
+// introduced to (repeated notes are always allowed). A reachability table is
+// built first so the walk can never paint itself into a corner: every choice
+// still leaves a way to land on the tonic at the end.
 
-import { KEYS, keyFor, midiOf, type Key, type Mode } from './music';
+import type { Key } from './music';
+import { skillOf } from './skills';
 
 export type Rng = () => number;
 
@@ -22,7 +24,7 @@ export function makeRng(seed: number): Rng {
   };
 }
 
-function pick<T>(rng: Rng, items: T[], weights: number[]): T {
+export function pick<T>(rng: Rng, items: T[], weights: number[] = items.map(() => 1)): T {
   const total = weights.reduce((a, b) => a + b, 0);
   let r = rng() * total;
   for (let i = 0; i < items.length; i++) {
@@ -44,17 +46,18 @@ const RHYTHM_CELLS: Record<RhythmCellId, { beats: number[]; weight: number }> = 
 };
 
 export interface GenParams {
-  mode: Mode | 'either';
+  key: Key;
   /** Lowest and highest scale degree allowed. */
   range: [number, number];
-  /** Allowed interval sizes in scale steps (0 = repeat, 1 = step, 2 = third, ...). */
-  intervals: number[];
-  /** An interval size to feature more often (the level's new material). */
-  focus?: number;
+  /** Skill ids (see skills.ts) the melody may use. */
+  allowed: ReadonlySet<string>;
+  /** Relative preference for each skill (1 = neutral). */
+  weight?: (skill: string) => number;
+  /** Degrees the melody may start on; 0 (the tonic) is always possible. */
+  starts: number[];
   rhythms: RhythmCellId[];
   meters: number[];
   measures: number;
-  startOnTonic: boolean;
 }
 
 export interface Note {
@@ -71,10 +74,8 @@ export interface Exercise {
   totalBeats: number;
 }
 
-/** Multiplier on how often an interval size is chosen (1 = neutral). */
-export type IntervalWeighting = (size: number) => number;
-
-const BASE_INTERVAL_WEIGHT: Record<number, number> = { 0: 0.5, 1: 4, 2: 2, 3: 1.2, 4: 1, 5: 0.6, 6: 0.1, 7: 0.5 };
+// Preference by size of move in staff steps, before skill weighting.
+const SIZE_WEIGHT: Record<number, number> = { 0: 0.5, 1: 4, 2: 2, 3: 1.2, 4: 1, 5: 0.6, 7: 0.5 };
 
 function generateRhythm(p: GenParams, meter: number, rng: Rng): number[] {
   const durations: number[] = [];
@@ -99,87 +100,56 @@ function generateRhythm(p: GenParams, meter: number, rng: Rng): number[] {
   return durations;
 }
 
-function generateDegrees(
-  count: number,
-  p: GenParams,
-  key: Key,
-  rng: Rng,
-  weighting: IntervalWeighting = () => 1,
-): number[] {
+function generateDegrees(count: number, p: GenParams, rng: Rng): number[] {
+  const { key, allowed } = p;
+  const weight = p.weight ?? (() => 1);
   const [lo, hi] = p.range;
-  const tonics = [-7, 0, 7].filter((t) => t >= lo && t <= hi);
-  const maxLeap = Math.max(...p.intervals);
-  const canReachTonic = (d: number, notesLeft: number) =>
-    tonics.some((t) => Math.abs(d - t) <= notesLeft * maxLeap && (notesLeft > 0 || d === t));
+  const degrees = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  const tonics = new Set([-7, 0, 7].filter((t) => t >= lo && t <= hi));
 
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const starts = p.startOnTonic ? [0] : [0, 2, 4, 7].filter((d) => d >= lo && d <= hi);
-    const degrees = [pick(rng, starts, starts.map((d) => (d === 0 ? 2 : 1)))];
-    let ok = true;
-
-    for (let i = 1; i < count; i++) {
-      const prev = degrees[i - 1];
-      const prevMove = i >= 2 ? prev - degrees[i - 2] : 0;
-      const notesLeft = count - 1 - i;
-      const options: number[] = [];
-      const weights: number[] = [];
-
-      for (const size of p.intervals) {
-        for (const dir of size === 0 ? [0] : [1, -1]) {
-          const d = prev + dir * size;
-          if (d < lo || d > hi || !canReachTonic(d, notesLeft)) continue;
-          if (Math.abs(midiOf(key, d) - midiOf(key, prev)) % 12 === 6) continue; // no tritones
-
-          let w = (BASE_INTERVAL_WEIGHT[size] ?? 0.3) * weighting(size);
-          if (size === p.focus) w *= 1.8;
-          // After a leap, strongly prefer stepping back the other way.
-          if (Math.abs(prevMove) >= 3) {
-            if (size === 1 && Math.sign(dir) === -Math.sign(prevMove)) w *= 3;
-            else if (size >= 2 && Math.sign(dir) === Math.sign(prevMove)) w *= 0.15;
-          }
-          if (size === 0 && prevMove === 0 && i >= 2) w *= 0.2; // avoid long runs of repeats
-          // Near the end, lean toward the tonic.
-          if (notesLeft <= 2) {
-            const dist = Math.min(...tonics.map((t) => Math.abs(d - t)));
-            w *= dist <= notesLeft ? 2 : 0.5;
-          }
-          options.push(d);
-          weights.push(w);
-        }
-      }
-
-      if (!options.length) {
-        ok = false;
-        break;
-      }
-      degrees.push(pick(rng, options, weights));
-    }
-    if (ok) return degrees;
+  // Legal next degrees from each degree: a repeat, or any allowed skill.
+  const moves = new Map(
+    degrees.map((d) => [d, degrees.filter((e) => e === d || allowed.has(skillOf(key, d, e)!))]),
+  );
+  // reach[k]: degrees from which a tonic can be reached in exactly k moves.
+  const reach: Set<number>[] = [tonics];
+  for (let k = 1; k < count; k++) {
+    reach.push(new Set(degrees.filter((d) => moves.get(d)!.some((e) => reach[k - 1].has(e)))));
   }
 
-  // Fallback (shouldn't happen with sane params): a simple descent to the tonic.
-  return Array.from({ length: count }, (_, i) => Math.max(0, Math.min(hi, count - 1 - i)));
-}
+  const starts = [...new Set([0, ...p.starts])].filter((d) => reach[count - 1].has(d));
+  const melody = [pick(rng, starts, starts.map((d) => (d === 0 ? 2 : 1)))];
 
-export interface GenOptions {
-  weighting?: IntervalWeighting;
-  /** Fix the tonic to this pitch class (0 = C); the level still decides major or minor. */
-  tonic?: number | null;
-}
-
-export function generateExercise(p: GenParams, rng: Rng, opts: GenOptions = {}): Exercise {
-  const { weighting, tonic = null } = opts;
-  let key: Key;
-  if (tonic === null) {
-    const keys = KEYS.filter((k) => p.mode === 'either' || k.mode === p.mode);
-    key = keys[Math.floor(rng() * keys.length)];
-  } else {
-    const mode: Mode = p.mode === 'either' ? (rng() < 0.5 ? 'major' : 'minor') : p.mode;
-    key = keyFor(tonic, mode);
+  for (let i = 1; i < count; i++) {
+    const prev = melody[i - 1];
+    const prevMove = i >= 2 ? prev - melody[i - 2] : 0;
+    const left = count - 1 - i;
+    const options = moves.get(prev)!.filter((e) => reach[left].has(e));
+    const weights = options.map((d) => {
+      const size = Math.abs(d - prev);
+      let w = (SIZE_WEIGHT[size] ?? 0.3) * (size ? weight(skillOf(key, prev, d)!) : 1);
+      // After a leap, prefer stepping back the other way.
+      if (Math.abs(prevMove) >= 3) {
+        if (size === 1 && Math.sign(d - prev) === -Math.sign(prevMove)) w *= 3;
+        else if (size >= 2 && Math.sign(d - prev) === Math.sign(prevMove)) w *= 0.15;
+      }
+      if (size === 0 && prevMove === 0 && i >= 2) w *= 0.2; // avoid long runs of repeats
+      // Near the end, lean toward the tonic.
+      if (left <= 2) {
+        const dist = Math.min(...[...tonics].map((t) => Math.abs(d - t)));
+        w *= dist <= left ? 2 : 0.5;
+      }
+      return w;
+    });
+    melody.push(pick(rng, options, weights));
   }
-  const meter = p.meters[Math.floor(rng() * p.meters.length)];
+  return melody;
+}
+
+export function generateExercise(p: GenParams, rng: Rng): Exercise {
+  const meter = pick(rng, p.meters);
   const durations = generateRhythm(p, meter, rng);
-  const degrees = generateDegrees(durations.length, p, key, rng, weighting);
+  const degrees = generateDegrees(durations.length, p, rng);
 
   let t = 0;
   const notes = durations.map((beats, i) => {
@@ -187,5 +157,5 @@ export function generateExercise(p: GenParams, rng: Rng, opts: GenOptions = {}):
     t += beats;
     return note;
   });
-  return { key, meter, notes, totalBeats: t };
+  return { key: p.key, meter, notes, totalBeats: t };
 }

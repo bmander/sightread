@@ -111,14 +111,3 @@ export function degreeOfMidi(key: Key, midi: number): number {
 export function staffStepOf(key: Key, degree: number): number {
   return key.tonicStep + degree;
 }
-
-export const INTERVAL_NAMES: Record<number, string> = {
-  0: 'repeated notes',
-  1: 'steps',
-  2: 'thirds',
-  3: 'fourths',
-  4: 'fifths',
-  5: 'sixths',
-  6: 'sevenths',
-  7: 'octaves',
-};

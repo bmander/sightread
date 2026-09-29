@@ -1,6 +1,7 @@
-import { freshProgress, LEVELS, type Progress } from './curriculum';
+import { UNITS } from './skills';
+import { freshProgress, type Progress } from './teacher';
 
-const PROGRESS_KEY = 'sightread.progress.v1';
+const PROGRESS_KEY = 'sightread.progress.v2';
 const SETTINGS_KEY = 'sightread.settings.v1';
 
 export interface Settings {
@@ -34,9 +35,8 @@ function write(key: string, value: unknown): void {
 
 export function loadProgress(): Progress {
   const saved = read<Progress>(PROGRESS_KEY);
-  const p = { ...freshProgress(), ...(saved?.version === 1 ? saved : {}) };
-  p.level = Math.min(Math.max(0, p.level), LEVELS.length - 1);
-  p.maxLevel = Math.min(Math.max(p.level, p.maxLevel), LEVELS.length - 1);
+  const p = { ...freshProgress(), ...(saved?.version === 2 ? saved : {}) };
+  p.introduced = Math.min(Math.max(1, p.introduced), UNITS.length);
   return p;
 }
 

@@ -17,11 +17,17 @@ npm test
   mapping from scale degree to pitch and staff position. The key can be fixed from the
   header; the level still decides major or minor.
 - `src/generator.ts`: seeded procedural exercises. Melodies are a weighted walk
-  that favours steps, recovers after leaps, avoids tritones, and ends on the tonic.
-  Weak intervals are weighted up.
-- `src/curriculum.ts`: the level ladder and adaptation rules. The last 3 scores
-  at a level must average ≥ 90% to promote, < 50% demotes, and tempo is nudged
-  ±5% within a level.
+  using only allowed shape pairs, favouring steps and recovering after leaps. A
+  reachability table guarantees they end on the tonic.
+- `src/skills.ts`: the curriculum, 33 shape pairs. A shape pair plus its staff distance is
+  always the same interval (la↑fa a step is always a half step), so each pair is a skill,
+  learned ascending and descending.
+- `src/teacher.ts`: introduces pairs one at a time with a short drill, then generates
+  "songs" from known pairs only, weighted toward new, due, and missed pairs. Each
+  directed pair has a Leitner box for spaced review. The next pair arrives when the
+  newest is solid and the last 3 songs average ≥ 80%. Rhythm, meter, length, and tempo
+  unlock with the number of pairs learned, and syllables are printed only for pairs
+  still being learned.
 - `src/render.ts`: SVG staff with shaped noteheads (fa ◢, sol ●, la ■, mi ◆).
 - `src/pitch.ts`: YIN pitch detection. `src/mic.ts` taps the mic with an AudioWorklet
   so every ~21 ms window is analysed, even when animation frames stall.

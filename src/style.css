@@ -88,6 +88,8 @@ body[data-phase='running'] #score-wrap { overflow: hidden; }
 .note.active .head, .note.active .stem { stroke: var(--active); }
 .note.active .head.filled, .note.active .flag, .note.active .dot { fill: var(--active); }
 .note.active .syl { fill: var(--active); font-weight: 600; }
+/* Notes reached by the pair being learned. */
+.note.focus .syl { fill: var(--accent); font-weight: 600; }
 
 /* Live mic verdicts while singing. */
 .note.passed.hit { opacity: 0.6; }
@@ -116,12 +118,23 @@ kbd { font-family: ui-monospace, monospace; font-size: 0.7em; opacity: 0.65; mar
 #tally { margin-left: auto; color: var(--muted); }
 
 #teacher { min-height: 1.5em; font-style: italic; margin: 6px 0 24px; padding-left: 12px; border-left: 3px solid var(--rule); }
-#teacher[data-change='promote'] { border-color: var(--good); }
-#teacher[data-change='demote'] { border-color: var(--miss); }
+#teacher[data-change='introduce'] { border-color: var(--good); }
+
+/* ---- pairs ---- */
+.pairs { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin: 4px 0 8px; }
+.pair { border: 1px solid var(--rule); border-radius: 4px; padding: 3px 6px; font-size: 0.85rem; line-height: 1.25; }
+.pair.new { border-color: var(--accent); }
+.pair.next { opacity: 0.55; border-style: dashed; }
+.pair b { font-weight: 600; }
+.pair .int { display: block; color: var(--muted); font-size: 0.75rem; font-style: italic; }
+.strength { display: flex; gap: 3px; align-items: center; font-size: 0.7rem; color: var(--muted); }
+.strength i { flex: 1; height: 4px; border-radius: 2px; background: var(--rule); position: relative; overflow: hidden; }
+.strength i::after { content: ''; position: absolute; inset: 0; width: var(--w); background: var(--good); }
 
 /* ---- panels ---- */
-.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 .panel { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; font-size: 0.95rem; }
+.panel.wide { grid-column: 1 / -1; }
 .panel p { margin: 6px 0; }
 .panel label { display: block; margin: 4px 0; }
 .panel h3:not(:first-child) { margin-top: 16px; }
@@ -137,7 +150,7 @@ kbd { font-family: ui-monospace, monospace; font-size: 0.7em; opacity: 0.65; mar
 .bar.empty { height: 100%; background: none; border: 1px dashed var(--rule); }
 .recent p { margin: 0; }
 
-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+table { width: 100%; max-width: 460px; border-collapse: collapse; margin-bottom: 8px; }
 td { padding: 1px 4px; white-space: nowrap; }
 td.meter { width: 100%; }
 td.meter span { display: block; height: 6px; width: var(--w); background: var(--good); border-radius: 3px; }
