@@ -6,7 +6,7 @@
 // can always land on the tonic at the end. Interval weights can be scaled by
 // the learner's weaknesses so the teacher serves more of what they miss.
 
-import { KEYS, midiOf, type Key, type Mode } from './music';
+import { KEYS, keyFor, midiOf, type Key, type Mode } from './music';
 
 export type Rng = () => number;
 
@@ -161,9 +161,22 @@ function generateDegrees(
   return Array.from({ length: count }, (_, i) => Math.max(0, Math.min(hi, count - 1 - i)));
 }
 
-export function generateExercise(p: GenParams, rng: Rng, weighting?: IntervalWeighting): Exercise {
-  const keys = KEYS.filter((k) => p.mode === 'either' || k.mode === p.mode);
-  const key = keys[Math.floor(rng() * keys.length)];
+export interface GenOptions {
+  weighting?: IntervalWeighting;
+  /** Fix the tonic to this pitch class (0 = C); the level still decides major or minor. */
+  tonic?: number | null;
+}
+
+export function generateExercise(p: GenParams, rng: Rng, opts: GenOptions = {}): Exercise {
+  const { weighting, tonic = null } = opts;
+  let key: Key;
+  if (tonic === null) {
+    const keys = KEYS.filter((k) => p.mode === 'either' || k.mode === p.mode);
+    key = keys[Math.floor(rng() * keys.length)];
+  } else {
+    const mode: Mode = p.mode === 'either' ? (rng() < 0.5 ? 'major' : 'minor') : p.mode;
+    key = keyFor(tonic, mode);
+  }
   const meter = p.meters[Math.floor(rng() * p.meters.length)];
   const durations = generateRhythm(p, meter, rng);
   const degrees = generateDegrees(durations.length, p, key, rng, weighting);

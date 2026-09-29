@@ -13,7 +13,9 @@ npm test
 
 ## How it works
 
-- `src/music.ts`: shapes, keys, and the mapping from scale degree to pitch and staff position.
+- `src/music.ts`: shapes, keys (any tonic, spelled with the fewest accidentals), and the
+  mapping from scale degree to pitch and staff position. The key can be fixed from the
+  header; the level still decides major or minor.
 - `src/generator.ts`: seeded procedural exercises. Melodies are a weighted walk
   that favours steps, recovers after leaps, avoids tritones, and ends on the tonic.
   Weak intervals are weighted up.

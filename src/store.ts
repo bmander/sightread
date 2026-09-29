@@ -9,9 +9,11 @@ export interface Settings {
   lowOctave: boolean;
   /** Sing-it mode: grade by listening through the microphone. */
   mic: boolean;
+  /** Tonic pitch class (0 = C) to practise in, or null to vary the key. */
+  tonic: number | null;
 }
 
-const DEFAULT_SETTINGS: Settings = { guide: false, metronome: true, lowOctave: false, mic: false };
+const DEFAULT_SETTINGS: Settings = { guide: false, metronome: true, lowOctave: false, mic: false, tonic: null };
 
 function read<T>(key: string): Partial<T> | null {
   try {

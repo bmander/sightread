@@ -33,6 +33,16 @@ describe('generateExercise', () => {
     });
   });
 
+  it('uses the chosen tonic, with the mode still set by the level', () => {
+    for (const [li, pc] of [[0, 5], [6, 10], [8, 1]]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const { key } = generateExercise(LEVELS[li], makeRng(seed), { tonic: pc });
+        expect(key.tonicMidi % 12).toBe(pc);
+        if (LEVELS[li].mode !== 'either') expect(key.mode).toBe(LEVELS[li].mode);
+      }
+    }
+  });
+
   it('is deterministic for a given seed', () => {
     const a = generateExercise(LEVELS[5], makeRng(42));
     const b = generateExercise(LEVELS[5], makeRng(42));
@@ -43,7 +53,7 @@ describe('generateExercise', () => {
     const count = (w?: (s: number) => number) => {
       let thirds = 0;
       for (let seed = 1; seed <= 300; seed++) {
-        const { notes } = generateExercise(LEVELS[3], makeRng(seed), w);
+        const { notes } = generateExercise(LEVELS[3], makeRng(seed), { weighting: w });
         for (let i = 1; i < notes.length; i++) if (Math.abs(notes[i].degree - notes[i - 1].degree) === 2) thirds++;
       }
       return thirds;

@@ -3,7 +3,7 @@ import { Sound } from './audio';
 import { applyResult, effectiveTempo, LEVELS, PROMOTE_AT, WINDOW, weakestInterval, weightingFor, type Progress } from './curriculum';
 import { generateExercise, makeRng, type Exercise } from './generator';
 import { Mic, type MicReading } from './mic';
-import { degreeOfMidi, INTERVAL_NAMES, midiOf, mod, SHAPES, shapeOf } from './music';
+import { degreeOfMidi, INTERVAL_NAMES, midiOf, mod, SHAPES, shapeOf, TONICS } from './music';
 import { headerWidthOf, PitchTrace, renderScore, type Score } from './render';
 import { judgeNote, scoreExercise, tuningOffset, type NoteVerdict, type PitchFrame } from './scoring';
 import { clearProgress, loadProgress, loadSettings, saveProgress, saveSettings, type Settings } from './store';
@@ -51,6 +51,20 @@ class App {
       saveProgress(this.progress);
       this.teacher(`Level ${this.progress.level + 1}: ${LEVELS[this.progress.level].title}.`);
       this.newExercise();
+      (e.target as HTMLSelectElement).blur(); // hand the keyboard back to the shortcuts
+    });
+    const keySel = $<HTMLSelectElement>('#key-select');
+    keySel.replaceChildren(
+      new Option('Vary', ''),
+      ...TONICS.map(({ pc, label }) => new Option(label, String(pc), false, pc === this.settings.tonic)),
+    );
+    keySel.addEventListener('change', () => {
+      this.settings.tonic = keySel.value === '' ? null : Number(keySel.value);
+      saveSettings(this.settings);
+      const label = TONICS.find((t) => t.pc === this.settings.tonic)?.label;
+      this.teacher(label ? `Singing on ${label} from now on, major or minor as the level calls for.` : 'The key will vary from exercise to exercise.');
+      this.newExercise();
+      keySel.blur();
     });
     $('#score-wrap').addEventListener('click', (e) => {
       if (this.phase !== 'review') return;
@@ -81,7 +95,10 @@ class App {
 
   newExercise() {
     this.stopAudio();
-    this.exercise = generateExercise(this.level, makeRng(this.seed++), weightingFor(this.progress));
+    this.exercise = generateExercise(this.level, makeRng(this.seed++), {
+      weighting: weightingFor(this.progress),
+      tonic: this.settings.tonic,
+    });
     this.tempo = effectiveTempo(this.progress);
     this.scored = true;
     this.frames = [];
@@ -349,6 +366,7 @@ class App {
       }),
     );
     sel.disabled = this.phase === 'running';
+    $<HTMLSelectElement>('#key-select').disabled = this.phase === 'running';
   }
 
   renderPanels() {

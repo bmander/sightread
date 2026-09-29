@@ -16,6 +16,7 @@ const BOTTOM_STEP = 30; // E4
 const HW = 7.5; // notehead half-width
 const HH = 5.5; // notehead half-height
 const STEM = 34;
+const ACC_SPACING = 13; // horizontal gap between key-signature accidentals
 const HEIGHT = 172;
 const SYL_Y = 160;
 
@@ -40,7 +41,7 @@ export interface Score {
 }
 
 /** Width of the fixed clef / key / time-signature header. */
-export const headerWidthOf = (ex: Exercise) => 84 + ex.key.signature.count * 11;
+export const headerWidthOf = (ex: Exercise) => 84 + ex.key.signature.count * ACC_SPACING;
 
 export interface RenderOptions {
   pxPerBeat: number;
@@ -79,7 +80,7 @@ export function renderScore(ex: Exercise, opts: RenderOptions): Score {
   clef.textContent = '𝄞';
   SIGNATURE_STEPS[sig.type].slice(0, sig.count).forEach((s, i) => {
     // Flats: nudge up so the bowl, not the glyph's centre, sits on the line/space.
-    const acc = el('text', { x: 48 + i * 11, y: yOf(s) - (sig.type === 'flat' ? 4 : 0), class: 'accidental' }, svg);
+    const acc = el('text', { x: 50 + i * ACC_SPACING, y: yOf(s) - (sig.type === 'flat' ? 4 : 0), class: 'accidental' }, svg);
     acc.textContent = sig.type === 'sharp' ? '♯' : '♭';
   });
   for (const [txt, y] of [[ex.meter, yOf(36)], [4, yOf(32)]] as const) {
