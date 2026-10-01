@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { makeRng } from './generator';
-import { staffStepOf } from './music';
-import { skillOf, UNITS } from './skills';
-import { applyResult, boxOf, freshProgress, knownSkills, planLesson, STABLE_BOX, type Progress } from './teacher';
+import { midiOf, staffStepOf } from './music';
+import { PARTS } from './range';
+import { BANDS, placementId, skillOf, UNITS } from './skills';
+import {
+  applyResult,
+  boxOf,
+  freshProgress,
+  knownSkills,
+  movesOf,
+  placementsInPlay,
+  planLesson,
+  STABLE_BOX,
+  type Progress,
+} from './teacher';
 
 /** Sing `n` lessons, grading each note with `grade`. */
 function practise(p: Progress, n: number, grade: (lessonIndex: number, noteIndex: number) => boolean, seed = 1) {
@@ -41,7 +52,7 @@ describe('planLesson', () => {
     const p = { ...freshProgress(), introduced: UNITS.length, drillsLeft: 0 };
     for (let pc = 0; pc < 12; pc++) {
       for (let seed = 1; seed <= 15; seed++) {
-        const { exercise: ex } = planLesson(p, makeRng(seed), pc);
+        const { exercise: ex } = planLesson(p, makeRng(seed), { tonic: pc, range: null });
         for (const n of ex.notes) {
           const step = staffStepOf(ex.key, n.degree);
           expect(step).toBeGreaterThanOrEqual(26); // A3
@@ -51,16 +62,51 @@ describe('planLesson', () => {
     }
   });
 
-  it('prints syllables only around pairs still being learned', () => {
+  it("sounds every note within the singer's range", () => {
+    const p = { ...freshProgress(), introduced: UNITS.length, drillsLeft: 0 };
+    for (const range of [...PARTS.map((part) => part.range), { low: 50, high: 63 }]) {
+      for (const tonic of [null, 0, 6, 11]) {
+        for (let seed = 1; seed <= 15; seed++) {
+          const lesson = planLesson(p, makeRng(seed), { tonic, range });
+          for (const n of lesson.exercise.notes) {
+            const midi = midiOf(lesson.exercise.key, n.degree) + 12 * lesson.shift;
+            expect(midi).toBeGreaterThanOrEqual(range.low);
+            expect(midi).toBeLessThanOrEqual(range.high);
+          }
+        }
+      }
+    }
+  });
+
+  it('skips the drill for a pair that cannot be sung in the range and key', () => {
+    const faOctave = UNITS.findIndex((u) => u.lo === 'fa' && u.hi === 'fa' && u.steps === 7);
+    const p = { ...freshProgress(), introduced: faOctave + 1 };
+    // D3–D4 holds no C–C or F–F octave.
+    const lesson = planLesson(p, makeRng(1), { tonic: 0, range: { low: 50, high: 62 } });
+    expect(lesson.kind).toBe('song');
+  });
+
+  it('prints syllables only where a pair is still being learned in that part of the staff', () => {
     const p = { ...freshProgress(), introduced: 3, drillsLeft: 0 };
-    for (const u of UNITS.slice(0, 3)) for (const s of [u.up, u.down]) p.skills[s] = { box: 4, due: 99, hit: 9, miss: 0 };
+    const inPlay = [...placementsInPlay(p, { tonic: null, range: null })];
+    for (const id of inPlay) p.skills[id] = { box: 4, due: 99, hit: 9, miss: 0 };
     expect(planLesson(p, makeRng(5)).syllables.some(Boolean)).toBe(false);
-    p.skills[UNITS[2].up].box = 0;
-    const lesson = planLesson(p, makeRng(5));
-    const moves = lesson.exercise.notes.map((n, i) => (i ? skillOf(lesson.exercise.key, lesson.exercise.notes[i - 1].degree, n.degree) : null));
-    moves.forEach((s, i) => {
-      if (s === UNITS[2].up) expect(lesson.syllables[i]).toBe(true);
-    });
+    const weak = inPlay.find((id) => id.startsWith(`${UNITS[2].up}@`))!;
+    p.skills[weak].box = 0;
+    let found = 0;
+    for (let seed = 1; seed <= 10; seed++) {
+      const lesson = planLesson(p, makeRng(seed));
+      movesOf(lesson.exercise).forEach((id, i) => {
+        if (id === weak) expect(lesson.syllables[i]).toBe(true), found++;
+      });
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('moves lessons around the staff', () => {
+    const p = { ...freshProgress(), introduced: 7, drillsLeft: 0 };
+    const bands = new Set(Array.from({ length: 30 }, (_, seed) => planLesson(p, makeRng(seed)).band));
+    expect(bands).toEqual(new Set(BANDS));
   });
 });
 
@@ -72,13 +118,27 @@ describe('applyResult', () => {
     expect(kinds.filter((k) => k === 'drill').length).toBeGreaterThanOrEqual(4); // drills for the new pair too
   });
 
-  it('keeps introducing pairs across a long run, and every introduced pair gets practised', () => {
+  it('keeps introducing pairs across a long run, and every pair gets practised across the staff', () => {
     const { p } = practise(freshProgress(), 250, () => true);
-    expect(p.introduced).toBeGreaterThan(20);
+    expect(p.introduced).toBeGreaterThan(15);
     for (const u of UNITS.slice(0, p.introduced - 1)) {
-      expect(boxOf(p, u.up), u.up).toBeGreaterThanOrEqual(STABLE_BOX);
-      expect(boxOf(p, u.down), u.down).toBeGreaterThanOrEqual(STABLE_BOX);
+      for (const s of [u.up, u.down]) {
+        const solid = BANDS.filter((b) => boxOf(p, placementId(s, b)) >= STABLE_BOX);
+        expect(solid.length, s).toBeGreaterThanOrEqual(2);
+      }
     }
+  });
+
+  it('holds the next pair until every placement on the staff is solid', () => {
+    const p: Progress = { ...freshProgress(), introduced: 2, drillsLeft: 0, recent: [1, 1, 1], sung: 50 };
+    const inPlay = [...placementsInPlay(p, { tonic: null, range: null })];
+    for (const id of inPlay) p.skills[id] = { box: 3, due: 0, hit: 9, miss: 0 };
+    const lesson = planLesson(p, makeRng(3));
+    const perfect = lesson.exercise.notes.map(() => true);
+    expect(applyResult(p, lesson, perfect).progress.introduced).toBe(3);
+    const shaky = inPlay.find((id) => !movesOf(lesson.exercise).includes(id))!;
+    p.skills[shaky].box = 0;
+    expect(applyResult(p, lesson, perfect).progress.introduced).toBe(2);
   });
 
   it('does not introduce new pairs for a struggling singer', () => {
@@ -90,7 +150,7 @@ describe('applyResult', () => {
   it('moves a skill up a box only when due, and drops it on a miss', () => {
     let p: Progress = { ...freshProgress(), drillsLeft: 0 };
     const lesson = planLesson(p, makeRng(2));
-    const s = UNITS[0].up;
+    const s = movesOf(lesson.exercise).find(Boolean)!;
     const ok = lesson.exercise.notes.map(() => true);
     p = applyResult(p, lesson, ok).progress;
     expect(boxOf(p, s)).toBe(1);

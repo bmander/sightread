@@ -2,10 +2,12 @@ import './style.css';
 import { Sound } from './audio';
 import { makeRng, type Exercise } from './generator';
 import { Mic, type MicReading } from './mic';
-import { degreeOfMidi, midiOf, mod, SHAPES, shapeOf, TONICS } from './music';
+import { degreeOfMidi, midiOf, mod, SHAPES, shapeOf, TONICS, type Shape } from './music';
+import { rangeName, type VoiceRange } from './range';
+import { RangeFinder } from './range-finder';
 import { headerWidthOf, PitchTrace, renderScore, type Score } from './render';
 import { judgeNote, scoreExercise, tuningOffset, type NoteVerdict, type PitchFrame } from './scoring';
-import { describeSkill, INTERVAL_LABELS, unitName, UNITS } from './skills';
+import { BANDS, describePlacement, placementId, STEP_LABELS, unitName, UNITS } from './skills';
 import { clearProgress, loadProgress, loadSettings, saveProgress, saveSettings, type Settings } from './store';
 import {
   applyResult,
@@ -14,7 +16,8 @@ import {
   newestUnit,
   planLesson,
   STABLE_BOX,
-  weakestSkill,
+  placementsInPlay,
+  weakestPlacement,
   WINDOW,
   type Lesson,
   type Progress,
@@ -53,6 +56,8 @@ class App {
   /** Microphone grading for the last run, if it was listened to. */
   verdicts: NoteVerdict[] | null = null;
   offsetCents = 0;
+  /** The range finder, while it is open. */
+  finder: RangeFinder | null = null;
 
   constructor() {
     this.mic.onReading = this.onMicReading;
@@ -89,16 +94,59 @@ class App {
             'Press Start, listen to the key being pitched, then sing each shape as it crosses the line.',
     );
     this.newExercise();
+    if (!this.settings.range) this.openRangeFinder();
   }
 
-  /** MIDI pitch to sound for a scale degree, honouring the low-octave setting. */
+  /** MIDI pitch to sound for a scale degree, in the octave that suits the singer's range. */
   soundingMidi(degree: number): number {
-    return midiOf(this.exercise.key, degree) - (this.settings.lowOctave ? 12 : 0);
+    return midiOf(this.exercise.key, degree) + 12 * this.lesson.shift;
+  }
+
+  // ---- vocal range --------------------------------------------------------
+
+  openRangeFinder() {
+    if (this.finder) return;
+    this.stopAudio();
+    if (this.phase === 'running') this.setPhase('idle');
+    document.body.dataset.range = 'open';
+    this.finder = new RangeFinder($('#range'), {
+      sound: this.sound,
+      openMic: async () => {
+        try {
+          await this.mic.start(this.sound.context);
+          return null;
+        } catch (err) {
+          return (err as Error).message || String(err);
+        }
+      },
+      current: this.settings.range,
+      onDone: (range) => this.closeRangeFinder(range),
+    });
+  }
+
+  closeRangeFinder(range: VoiceRange | null) {
+    this.finder?.close();
+    this.finder = null;
+    delete document.body.dataset.range;
+    this.sound.stop();
+    if (!this.settings.mic) this.mic.stop();
+    this.renderRange();
+    if (!range) return;
+    this.settings.range = range;
+    saveSettings(this.settings);
+    this.renderRange();
+    this.teacher(`Your range is ${rangeName(range)}. Every exercise will sound within it.`);
+    this.newExercise();
+  }
+
+  renderRange() {
+    const r = this.settings.range;
+    $('#range-name').textContent = r ? rangeName(r) : 'not set';
   }
 
   newExercise() {
     this.stopAudio();
-    this.lesson = planLesson(this.progress, makeRng(this.seed++), this.settings.tonic);
+    this.lesson = planLesson(this.progress, makeRng(this.seed++), this.settings);
     this.exercise = this.lesson.exercise;
     this.tempo = this.lesson.tempo;
     this.scored = true;
@@ -138,8 +186,9 @@ class App {
     const countIn = ex.meter;
 
     // Pitch the key the way a keyer would: tonic, third, fifth, then the chord.
-    [0, 2, 4].forEach((d, i) => sound.tone(this.soundingMidi(d), t0 + i * 0.4, 0.4));
-    [0, 2, 4].forEach((d) => sound.tone(this.soundingMidi(d), t0 + 1.2, 0.9, 0.12));
+    const chord = [0, 2, 4].map((d) => this.lesson.home + d);
+    chord.forEach((d, i) => sound.tone(this.soundingMidi(d), t0 + i * 0.4, 0.4));
+    chord.forEach((d) => sound.tone(this.soundingMidi(d), t0 + 1.2, 0.9, 0.12));
 
     const introEnd = t0 + INTRO_SECONDS;
     const exStart = introEnd + countIn * spb;
@@ -230,6 +279,7 @@ class App {
       this.progress,
       this.lesson,
       this.missed.map((m) => !m),
+      this.settings,
     );
     this.progress = outcome.progress;
     saveProgress(this.progress);
@@ -367,7 +417,11 @@ class App {
       if (s === undefined) return '<span class="bar empty"></span>';
       return `<span class="bar ${s >= INTRODUCE_AT ? 'good' : ''}" style="--h:${Math.max(6, s * 100)}%" title="${Math.round(s * 100)}%"></span>`;
     }).join('');
-    const learned = (i: number) => [UNITS[i].up, UNITS[i].down].every((s) => boxOf(p, s) >= STABLE_BOX);
+    const inPlay = placementsInPlay(p, this.settings);
+    const placementsOf = (i: number) =>
+      [UNITS[i].up, UNITS[i].down].flatMap((s) => BANDS.map((b) => placementId(s, b)).filter((id) => inPlay.has(id)));
+    const learned = (i: number) => placementsOf(i).every((id) => boxOf(p, id) >= STABLE_BOX);
+    const unsolid = [...inPlay].filter((id) => boxOf(p, id) < STABLE_BOX).length;
     const newest = newestUnit(p);
     $('#progress-panel').innerHTML = `
       <h3>Progress</h3>
@@ -376,18 +430,40 @@ class App {
         p.drillsLeft > 0
           ? `<p>Drilling the new pair <b>${unitName(newest)}</b>.</p>`
           : `<div class="recent"><div class="bars">${bars}</div>
-             <p>Get <b>${unitName(newest)}</b> solid and average ${Math.round(INTRODUCE_AT * 100)}% over ${WINDOW} songs to meet the next pair.</p></div>`
+             <p>${unsolid ? `Make every pair solid all over the staff (<b>${unsolid}</b> ${unsolid === 1 ? 'placement' : 'placements'} to go) and average` : 'Average'} ${Math.round(INTRODUCE_AT * 100)}% over ${WINDOW} songs to meet the next pair.</p></div>`
       }
       <p class="muted">${p.sung} exercises sung · tempo ×${p.tempoFactor.toFixed(2)}</p>`;
 
-    // Each introduced pair with its up and down strength, plus the one coming next.
-    const strength = (s: string, arrow: string) =>
-      `<span class="strength" title="${describeSkill(s)}">${arrow}<i style="--w:${(boxOf(p, s) / 5) * 100}%"></i></span>`;
-    const cards = UNITS.slice(0, Math.min(UNITS.length, p.introduced + 1)).map((u, i) => {
-      const cls = i >= p.introduced ? 'next' : i === p.introduced - 1 ? 'new' : '';
-      const body = i >= p.introduced ? '<span class="int">next</span>' : strength(u.up, '↑') + strength(u.down, '↓');
-      return `<div class="pair ${cls}"><b>${u.lo}–${u.hi}</b><span class="int">${INTERVAL_LABELS[u.semitones]}</span>${body}</div>`;
-    });
+    // Every pair on a grid of lower shape × upper shape, one chip per staff distance. Introduced
+    // chips show the strength of each direction (columns) in each band of the staff (rows, high
+    // at the top); the next one is outlined, later ones are faint.
+    const strength = (id: string) =>
+      inPlay.has(id)
+        ? `<i title="${describePlacement(id)}" style="--w:${(boxOf(p, id) / 5) * 100}%"></i>`
+        : '<i class="off"></i>';
+    const strengths = (i: number) => {
+      const { up, down } = UNITS[i];
+      const rows = [...BANDS].reverse().flatMap((b) => [strength(placementId(up, b)), strength(placementId(down, b))]);
+      return `<span class="bands"><span>↑</span><span>↓</span>${rows.join('')}</span>`;
+    };
+    const chip = (i: number) => {
+      const u = UNITS[i];
+      const cls = i > p.introduced ? 'locked' : i === p.introduced ? 'next' : i === p.introduced - 1 ? 'new' : '';
+      const body = i < p.introduced ? strengths(i) : '';
+      return `<div class="chip ${cls}" title="${unitName(u)}${cls === 'next' ? ' · next' : ''}"><b>${STEP_LABELS[u.steps]}</b>${body}</div>`;
+    };
+    const cell = (lo: Shape, hi: Shape) => {
+      const chips = UNITS.map((u, i) => ({ u, i }))
+        .filter(({ u }) => u.lo === lo && u.hi === hi)
+        .sort((a, b) => a.u.steps - b.u.steps)
+        .map(({ i }) => chip(i));
+      return `<div class="cell">${chips.join('') || '<span class="muted">·</span>'}</div>`;
+    };
+    const grid = [
+      '<span class="axis">lower ╲ upper</span>',
+      ...SHAPES.map((hi) => `<span class="axis">${hi}</span>`),
+      ...SHAPES.flatMap((lo) => [`<span class="axis">${lo}</span>`, ...SHAPES.map((hi) => cell(lo, hi))]),
+    ].join('');
     const shapeRows = SHAPES.filter((s) => p.shapes[s].hit + p.shapes[s].miss > 0)
       .map((s) => {
         const t = p.shapes[s];
@@ -395,12 +471,12 @@ class App {
         return `<tr><td>${s}</td><td class="meter"><span style="--w:${acc * 100}%" class="${acc < 0.75 ? 'weak' : ''}"></span></td><td>${Math.round(acc * 100)}%</td></tr>`;
       })
       .join('');
-    const weak = weakestSkill(p);
+    const weak = weakestPlacement(p);
     $('#stats-panel').innerHTML = `
       <h3>Pairs</h3>
-      <div class="pairs">${cards.join('')}</div>
+      <div class="pair-grid">${grid}</div>
       ${shapeRows ? `<table>${shapeRows}</table>` : ''}
-      <p class="muted">${weak ? `The teacher is serving extra ${describeSkill(weak)}.` : 'Bars fill as each direction of a pair gets solid.'}</p>`;
+      <p class="muted">${weak ? `The teacher is serving extra ${describePlacement(weak)}.` : 'Each chip has a bar for each direction (↑ ↓) in each part of the staff, high to low. Bars fill as they get solid.'}</p>`;
   }
 
   // ---- microphone ---------------------------------------------------------
@@ -420,6 +496,10 @@ class App {
   }
 
   onMicReading = (reading: MicReading) => {
+    if (this.finder) {
+      this.finder.hear(reading);
+      return;
+    }
     const run = this.run;
     if (run && this.phase === 'running' && this.trace) {
       const beat = (reading.time - run.exStart) / run.spb;
@@ -461,7 +541,7 @@ class App {
   // ---- input --------------------------------------------------------------
 
   bindSettings() {
-    for (const k of ['guide', 'metronome', 'lowOctave'] as const) {
+    for (const k of ['guide', 'metronome'] as const) {
       const box = $<HTMLInputElement>(`#set-${k}`);
       box.checked = this.settings[k];
       box.addEventListener('change', () => {
@@ -482,6 +562,8 @@ class App {
       }
     });
     this.updateMicReadout(null);
+    this.renderRange();
+    $('#find-range').addEventListener('click', () => this.openRangeFinder());
     $('#reset').addEventListener('click', () => {
       if (!confirm('Erase all progress and start from level 1?')) return;
       clearProgress();
@@ -493,7 +575,7 @@ class App {
 
   bindKeys() {
     window.addEventListener('keydown', (e) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof Element && e.target.closest('select, input'))) return;
+      if (this.finder || e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof Element && e.target.closest('select, input'))) return;
       const k = e.key.toLowerCase();
       const act = (fn: () => void) => {
         e.preventDefault();

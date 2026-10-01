@@ -5,8 +5,12 @@
 // and in both major and minor. (La up a step to fa is always a half step; fa
 // up a step to sol is always a whole step.) So each such move is a skill to
 // learn, practised ascending and descending.
+//
+// Reading a move also depends on where it sits on the staff, so each
+// directed pair is learned separately in each band (low, middle, high): a
+// placement.
 
-import { shapeOf, type Key, type Shape } from './music';
+import { shapeOf, staffStepOf, type Key, type Shape } from './music';
 
 /** An interval between two shapes, learned in both directions. */
 export interface Unit {
@@ -103,6 +107,9 @@ export const INTERVAL_LABELS: Record<number, string> = {
   12: 'octave',
 };
 
+/** Staff distance as an interval number, e.g. 1 step → "2nd". */
+export const STEP_LABELS: Record<number, string> = { 1: '2nd', 2: '3rd', 3: '4th', 4: '5th', 5: '6th', 7: '8ve' };
+
 /** e.g. "la–fa (half step)"; the interval disambiguates pairs like la–fa a step vs a third. */
 export const unitName = (u: Unit) => `${u.lo}–${u.hi} (${INTERVAL_LABELS[u.semitones]})`;
 
@@ -112,4 +119,38 @@ export function describeSkill(skill: string): string {
   if (!u) return skill;
   const [from, to] = skill === u.up ? [u.lo, u.hi] : [u.hi, u.lo];
   return `${from} ${skill === u.up ? '↑' : '↓'} ${to} · ${INTERVAL_LABELS[u.semitones]}`;
+}
+
+/** A part of the treble staff. */
+export type Band = 'low' | 'mid' | 'high';
+export const BANDS: Band[] = ['low', 'mid', 'high'];
+export const BAND_NAMES: Record<Band, string> = { low: 'low on the staff', mid: 'mid-staff', high: 'high on the staff' };
+
+/**
+ * The band a move sits in, by the midpoint of its two notes: low is below G4
+ * (the second line), high from D5 (the fourth line) up.
+ */
+export function bandOf(key: Key, a: number, b: number): Band {
+  const mid = (staffStepOf(key, a) + staffStepOf(key, b)) / 2;
+  return mid < 32 ? 'low' : mid < 36 ? 'mid' : 'high';
+}
+
+/** A directed skill in one band, e.g. "la↑fa1@high". */
+export const placementId = (skill: string, band: Band) => `${skill}@${band}`;
+
+export function splitPlacement(id: string): [string, Band] {
+  const at = id.lastIndexOf('@');
+  return [id.slice(0, at), id.slice(at + 1) as Band];
+}
+
+/** The placement exercised by moving from degree `a` to degree `b`, or null for a repeated note. */
+export function placementOf(key: Key, a: number, b: number): string | null {
+  const s = skillOf(key, a, b);
+  return s && placementId(s, bandOf(key, a, b));
+}
+
+/** e.g. "la ↑ fa · half step, high on the staff" */
+export function describePlacement(id: string): string {
+  const [skill, band] = splitPlacement(id);
+  return `${describeSkill(skill)}, ${BAND_NAMES[band]}`;
 }

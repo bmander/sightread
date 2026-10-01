@@ -51,9 +51,9 @@ export interface GenParams {
   range: [number, number];
   /** Skill ids (see skills.ts) the melody may use. */
   allowed: ReadonlySet<string>;
-  /** Relative preference for each skill (1 = neutral). */
-  weight?: (skill: string) => number;
-  /** Degrees the melody may start on; 0 (the tonic) is always possible. */
+  /** Relative preference for a move from degree `from` to `to` exercising `skill` (1 = neutral). */
+  weight?: (skill: string, from: number, to: number) => number;
+  /** Degrees the melody may start on, the first weighted double; a tonic is used if none can end on one. */
   starts: number[];
   rhythms: RhythmCellId[];
   meters: number[];
@@ -105,7 +105,7 @@ function generateDegrees(count: number, p: GenParams, rng: Rng): number[] {
   const weight = p.weight ?? (() => 1);
   const [lo, hi] = p.range;
   const degrees = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
-  const tonics = new Set([-7, 0, 7].filter((t) => t >= lo && t <= hi));
+  const tonics = new Set([-14, -7, 0, 7, 14].filter((t) => t >= lo && t <= hi));
 
   // Legal next degrees from each degree: a repeat, or any allowed skill.
   const moves = new Map(
@@ -117,8 +117,9 @@ function generateDegrees(count: number, p: GenParams, rng: Rng): number[] {
     reach.push(new Set(degrees.filter((d) => moves.get(d)!.some((e) => reach[k - 1].has(e)))));
   }
 
-  const starts = [...new Set([0, ...p.starts])].filter((d) => reach[count - 1].has(d));
-  const melody = [pick(rng, starts, starts.map((d) => (d === 0 ? 2 : 1)))];
+  let starts = [...new Set(p.starts)].filter((d) => reach[count - 1].has(d));
+  if (!starts.length) starts = [...tonics];
+  const melody = [pick(rng, starts, starts.map((d) => (d === p.starts[0] ? 2 : 1)))];
 
   for (let i = 1; i < count; i++) {
     const prev = melody[i - 1];
@@ -127,7 +128,7 @@ function generateDegrees(count: number, p: GenParams, rng: Rng): number[] {
     const options = moves.get(prev)!.filter((e) => reach[left].has(e));
     const weights = options.map((d) => {
       const size = Math.abs(d - prev);
-      let w = (SIZE_WEIGHT[size] ?? 0.3) * (size ? weight(skillOf(key, prev, d)!) : 1);
+      let w = (SIZE_WEIGHT[size] ?? 0.3) * (size ? weight(skillOf(key, prev, d)!, prev, d) : 1);
       // After a leap, prefer stepping back the other way.
       if (Math.abs(prevMove) >= 3) {
         if (size === 1 && Math.sign(d - prev) === -Math.sign(prevMove)) w *= 3;

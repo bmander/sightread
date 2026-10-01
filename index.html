@@ -20,6 +20,8 @@
         </div>
       </header>
 
+      <section id="range"></section>
+
       <section class="lesson">
         <h2 id="lesson-title"></h2>
         <p id="lesson-blurb"></p>
@@ -45,7 +47,7 @@
           <label><input type="checkbox" id="set-mic" /> Sing-it mode: listen with the microphone <span class="muted">(grades you by ear)</span></label>
           <label><input type="checkbox" id="set-metronome" /> Metronome click</label>
           <label><input type="checkbox" id="set-guide" /> Play the notes while I sing <span class="muted">(practice, not counted)</span></label>
-          <label><input type="checkbox" id="set-lowOctave" /> Sound an octave lower <span class="muted">(for lower voices)</span></label>
+          <p class="range-row">Your range: <b id="range-name"></b> <button id="find-range" class="subtle">Find my range</button></p>
           <h3>The shapes</h3>
           <div class="legend">
             <span><svg viewBox="-9 -7 18 14"><polygon points="-7.5,5.5 7.5,-5.5 7.5,5.5" /></svg>fa</span>

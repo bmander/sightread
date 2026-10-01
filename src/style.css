@@ -121,15 +121,37 @@ kbd { font-family: ui-monospace, monospace; font-size: 0.7em; opacity: 0.65; mar
 #teacher[data-change='introduce'] { border-color: var(--good); }
 
 /* ---- pairs ---- */
-.pairs { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin: 4px 0 8px; }
-.pair { border: 1px solid var(--rule); border-radius: 4px; padding: 3px 6px; font-size: 0.85rem; line-height: 1.25; }
-.pair.new { border-color: var(--accent); }
-.pair.next { opacity: 0.55; border-style: dashed; }
-.pair b { font-weight: 600; }
-.pair .int { display: block; color: var(--muted); font-size: 0.75rem; font-style: italic; }
-.strength { display: flex; gap: 3px; align-items: center; font-size: 0.7rem; color: var(--muted); }
-.strength i { flex: 1; height: 4px; border-radius: 2px; background: var(--rule); position: relative; overflow: hidden; }
-.strength i::after { content: ''; position: absolute; inset: 0; width: var(--w); background: var(--good); }
+.pair-grid { display: grid; grid-template-columns: auto repeat(4, 1fr); gap: 4px; margin: 4px 0 8px; }
+.pair-grid .axis { align-self: end; justify-self: center; padding: 0 6px; font-weight: 600; font-size: 0.85rem; }
+.pair-grid .axis:first-child { color: var(--muted); font-weight: 400; font-size: 0.7rem; font-style: italic; }
+.pair-grid .axis:nth-child(5n + 1) { align-self: center; justify-self: end; }
+.cell { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; min-height: 38px; padding: 4px; border-radius: 4px; background: color-mix(in srgb, var(--rule) 25%, transparent); }
+.cell > .muted { margin: auto; }
+.chip { display: flex; gap: 5px; align-items: flex-start; flex: 0 0 auto; min-width: 54px; border: 1px solid var(--rule); border-radius: 4px; padding: 2px 5px; font-size: 0.8rem; line-height: 1.2; background: var(--card); }
+.chip b { font-weight: 600; }
+.chip.new { border-color: var(--accent); }
+.chip.next { border-style: dashed; border-color: var(--accent); color: var(--muted); }
+.chip.locked { opacity: 0.4; border-style: dotted; }
+.bands { width: 38px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 3px; font-size: 0.6rem; line-height: 1; color: var(--muted); text-align: center; }
+.bands i { height: 4px; border-radius: 2px; background: var(--rule); position: relative; overflow: hidden; }
+.bands i::after { content: ''; position: absolute; inset: 0; width: var(--w); background: var(--good); }
+.bands i.off { background: none; border-top: 1px dotted var(--rule); border-radius: 0; height: 0; margin-top: 2px; }
+
+/* ---- range finder ---- */
+body[data-range='open'] .lesson,
+body[data-range='open'] .stage,
+body[data-range='open'] #controls { display: none; }
+#range:empty { display: none; }
+.range-card { margin: 20px 0 12px; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 20px; }
+.range-card h2 { margin-top: 0; }
+.range-card p { margin: 6px 0 12px; max-width: 60ch; }
+.range-card .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.range-card .live { font-size: 1.15rem; }
+.range-card .live b, .range-card .pitch { display: inline-block; min-width: 3ch; text-align: center; color: var(--accent); }
+.range-card .nudge { gap: 6px; }
+.range-card .nudge .label { width: 4.5em; }
+.range-card .nudge button { min-width: 2.2em; }
+.range-row { margin: 8px 0; }
 
 /* ---- panels ---- */
 .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }

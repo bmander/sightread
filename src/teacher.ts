@@ -4,14 +4,32 @@
 // pair is introduced with a short drill built around it, then joins the
 // "songs": exercises that use only pairs already introduced, weighted toward
 // pairs that are new, due for review, or often missed. Every directed pair
-// (la↑fa and fa↓la are separate) has its own Leitner box: a clean exercise
-// moves it up a box once it is due, a miss drops it back. The next pair is
-// introduced once the newest is stable and recent songs are going well.
-// Rhythm, meter, length and tempo unlock with the number of pairs learned.
+// (la↑fa and fa↓la are separate) has its own Leitner box in each band of the
+// staff it can reach (a placement): a clean exercise moves it up a box once
+// it is due, a miss drops it back. Each lesson is laid out around the
+// placement most in need, so practice moves around the staff. The next pair
+// is introduced only once every placement of every pair is stable and recent
+// songs are going well. Rhythm, meter, length and tempo unlock with the
+// number of pairs learned.
 
 import { generateExercise, pick, type Exercise, type GenParams, type RhythmCellId, type Rng } from './generator';
-import { keyFor, KEYS, shapeOf, SHAPES, type Key, type Mode, type Shape } from './music';
-import { describeSkill, INTERVAL_LABELS, skillOf, unitName, UNITS, unitOfSkill, type Unit } from './skills';
+import { keyFor, KEYS, midiOf, shapeOf, SHAPES, type Key, type Mode, type Shape } from './music';
+import { usableRange, type VoiceRange } from './range';
+import {
+  BAND_NAMES,
+  bandOf,
+  describePlacement,
+  INTERVAL_LABELS,
+  placementId,
+  placementOf,
+  skillOf,
+  splitPlacement,
+  unitName,
+  UNITS,
+  unitOfSkill,
+  type Band,
+  type Unit,
+} from './skills';
 
 export interface Tally {
   hit: number;
@@ -26,12 +44,13 @@ export interface SkillState extends Tally {
 }
 
 export interface Progress {
-  version: 2;
+  version: 3;
   /** How many of UNITS have been introduced. */
   introduced: number;
   /** Passing drills still needed on the newest pair before songs. */
   drillsLeft: number;
   drillTries: number;
+  /** By placement id (see skills.ts). */
   skills: Record<string, SkillState>;
   shapes: Record<Shape, Tally>;
   /** Exercises sung so far; the clock for spaced review. */
@@ -44,7 +63,7 @@ export interface Progress {
 /** Exercises to wait before reviewing a skill again, by box. */
 const BOX_INTERVALS = [1, 2, 4, 8, 16, 32];
 const MAX_BOX = BOX_INTERVALS.length - 1;
-/** A pair counts as learned (and its syllables stop being printed) from this box up. */
+/** A placement counts as learned (and its syllables stop being printed) from this box up. */
 export const STABLE_BOX = 2;
 /** Share of a skill's moves in one exercise that must be right to pass it, or below which it fails. */
 const SKILL_PASS = 0.75;
@@ -61,7 +80,7 @@ const TEMPO_MAX = 1.25;
 
 export function freshProgress(): Progress {
   return {
-    version: 2,
+    version: 3,
     introduced: 1,
     drillsLeft: DRILLS_PER_UNIT,
     drillTries: 0,
@@ -74,8 +93,8 @@ export function freshProgress(): Progress {
 }
 
 export const newestUnit = (p: Progress) => UNITS[p.introduced - 1];
-export const boxOf = (p: Progress, skill: string) => p.skills[skill]?.box ?? 0;
-const isYoung = (p: Progress, skill: string) => boxOf(p, skill) < STABLE_BOX;
+export const boxOf = (p: Progress, placement: string) => p.skills[placement]?.box ?? 0;
+const isYoung = (p: Progress, placement: string) => boxOf(p, placement) < STABLE_BOX;
 
 export function knownSkills(p: Progress): Set<string> {
   return new Set(UNITS.slice(0, p.introduced).flatMap((u) => [u.up, u.down]));
@@ -121,6 +140,12 @@ export interface Lesson {
   exercise: Exercise;
   /** The pair being drilled, for drills. */
   unit: Unit | null;
+  /** The band of the staff the lesson is centred on. */
+  band: Band;
+  /** The tonic degree the exercise is centred on, for pitching the key. */
+  home: number;
+  /** Octaves to sound the written notes up (or down, if negative) to suit the singer. */
+  shift: number;
   /** Per note: print its syllable. */
   syllables: boolean[];
   /** Per note: arrived at via the newest pair, while it is still being learned. */
@@ -130,99 +155,222 @@ export interface Lesson {
   blurb: string;
 }
 
+/** Lowest and highest staff steps used: two ledger lines either side of the staff (A3 to C6). */
+const STAFF_LO = 26;
+const STAFF_HI = 42;
+
+/** The learner's choices that shape lessons: a fixed key (or null to vary it) and their vocal range, if known. */
+export interface Setup {
+  tonic: number | null;
+  range: VoiceRange | null;
+}
+
+const ANY: Setup = { tonic: null, range: null };
+
+const modesFor = (introduced: number): Mode[] => (introduced >= MINOR_AT ? ['major', 'minor'] : ['major']);
+
+function keysFor(tonic: number | null, modes: Mode[]): Key[] {
+  return tonic === null ? KEYS.filter((k) => modes.includes(k.mode)) : modes.map((m) => keyFor(tonic, m));
+}
+
 /**
- * Degrees available in a key: about an octave and a half around the tonic,
- * trimmed so no note needs more than two ledger lines (A3 to C6).
+ * One way to lay out an exercise: a key, the tonic it is centred on, the
+ * degrees it may use (within the staff window, and the singer's range if
+ * known, else about an octave and a half around that tonic), the octaves to
+ * shift it by to sound in that range, and the placements a melody there can
+ * reach.
  */
-function rangeFor(key: Key): [number, number] {
-  const A3 = 26;
-  const C6 = 42;
-  return [Math.max(-5, A3 - key.tonicStep), Math.min(9, C6 - key.tonicStep)];
+interface Layout {
+  key: Key;
+  home: number;
+  range: [number, number];
+  shift: number;
+  placements: Set<string>;
 }
 
-function pickKey(rng: Rng, tonic: number | null, allowMinor: boolean): Key {
-  const mode: Mode = allowMinor && rng() < 0.35 ? 'minor' : 'major';
-  return tonic === null ? pick(rng, KEYS.filter((k) => k.mode === mode)) : keyFor(tonic, mode);
+/**
+ * The degree windows within `base` that fit the singer's range when sounded
+ * some octaves up or down, each with that shift (centring the window in the
+ * range when several shifts give the same window). Each contains `home`.
+ */
+function fitsFor(key: Key, home: number, base: [number, number], voice: VoiceRange | null) {
+  if (!voice) return [{ range: base, shift: 0 }];
+  const { low, high } = usableRange(voice);
+  const centre = (low + high) / 2;
+  const best = new Map<string, { range: [number, number]; shift: number; off: number }>();
+  const h = midiOf(key, home);
+  for (let shift = Math.ceil((low - h) / 12); shift <= Math.floor((high - h) / 12); shift++) {
+    const fits = (d: number) => midiOf(key, d) + 12 * shift >= low && midiOf(key, d) + 12 * shift <= high;
+    let [a, b] = [home, home];
+    while (a > base[0] && fits(a - 1)) a--;
+    while (b < base[1] && fits(b + 1)) b++;
+    const off = Math.abs((midiOf(key, a) + midiOf(key, b)) / 2 + 12 * shift - centre);
+    const prev = best.get(`${a},${b}`);
+    if (!prev || off < prev.off) best.set(`${a},${b}`, { range: [a, b], shift, off });
+  }
+  return [...best.values()];
 }
 
-/** Skill ids of each move in an exercise (null for repeated notes and the first note). */
-function movesOf(ex: Exercise): (string | null)[] {
-  return ex.notes.map((n, i) => (i ? skillOf(ex.key, ex.notes[i - 1].degree, n.degree) : null));
+/** Placements a melody in `range` can reach: those joined to a tonic by known moves, so it can get there and back. */
+function reachable(key: Key, range: [number, number], skills: Set<string>): Set<string> {
+  const tonics = [-14, -7, 0, 7, 14].filter((t) => t >= range[0] && t <= range[1]);
+  const linked = new Set(tonics);
+  const placements = new Set<string>();
+  for (let todo = [...tonics]; todo.length; ) {
+    const a = todo.pop()!;
+    for (let b = range[0]; b <= range[1]; b++) {
+      const s = skillOf(key, a, b);
+      if (!s || !skills.has(s)) continue;
+      placements.add(placementOf(key, a, b)!).add(placementOf(key, b, a)!);
+      if (!linked.has(b)) todo.push(b), linked.add(b);
+    }
+  }
+  return placements;
+}
+
+function layoutsFor(skills: Set<string>, keys: Key[], voice: VoiceRange | null): Layout[] {
+  return keys.flatMap((key) => {
+    const [lo, hi] = [STAFF_LO - key.tonicStep, STAFF_HI - key.tonicStep];
+    return [-14, -7, 0, 7, 14]
+      .filter((home) => home >= lo && home <= hi)
+      .flatMap((home) =>
+        fitsFor(key, home, voice ? [lo, hi] : [Math.max(home - 5, lo), Math.min(home + 9, hi)], voice).map(({ range, shift }) => ({
+          key,
+          home,
+          range,
+          shift,
+          placements: reachable(key, range, skills),
+        })),
+      );
+  });
+}
+
+/** Every placement of the introduced pairs that lessons can reach with this setup. */
+export function placementsInPlay(p: Progress, setup: Setup): Set<string> {
+  const layouts = layoutsFor(knownSkills(p), keysFor(setup.tonic, modesFor(p.introduced)), setup.range);
+  return new Set(layouts.flatMap((l) => [...l.placements]));
+}
+
+/** Placements in play that are not yet stable; the next pair waits for these. */
+export const unsolidPlacements = (p: Progress, setup: Setup) =>
+  [...placementsInPlay(p, setup)].filter((id) => isYoung(p, id));
+
+/** A layout that reaches `target`, in minor about a third of the time when both modes can. */
+function pickLayout(rng: Rng, layouts: Layout[], target: string): Layout {
+  const fits = layouts.filter((l) => l.placements.has(target));
+  const minor = fits.filter((l) => l.key.mode === 'minor');
+  const major = fits.filter((l) => l.key.mode === 'major');
+  return pick(rng, minor.length && (!major.length || rng() < 0.35) ? minor : major);
+}
+
+/** How much a placement wants practice: new, shaky, due or often missed. */
+function need(p: Progress, id: string): number {
+  const st = p.skills[id];
+  let w = st && st.box > 0 ? (st.box === 1 ? 1.6 : 1) : 2.5;
+  if (!st || p.sung >= st.due) w *= 1.8; // due for review
+  return w * (1 + 1.5 * missRate(st));
+}
+
+/** Placement ids of each move in an exercise (null for repeated notes and the first note). */
+export function movesOf(ex: Exercise): (string | null)[] {
+  return ex.notes.map((n, i) => (i ? placementOf(ex.key, ex.notes[i - 1].degree, n.degree) : null));
 }
 
 /** Plan the next exercise: a drill on the newest pair, or a song. */
-export function planLesson(p: Progress, rng: Rng, tonic: number | null = null): Lesson {
+export function planLesson(p: Progress, rng: Rng, setup: Setup = ANY): Lesson {
+  const { tonic, range: voice } = setup;
   const newest = newestUnit(p);
-  const isNewest = (s: string | null) => s === newest.up || s === newest.down;
+  const isNewest = (id: string | null) => id !== null && unitOfSkill(splitPlacement(id)[0]) === newest;
   const stage = stageFor(p.introduced);
   const tempo = Math.round(stage.tempo * p.tempoFactor);
   const allowed = knownSkills(p);
+  const young = (id: string | null) => id !== null && isYoung(p, id);
 
-  if (p.drillsLeft > 0) {
-    const key = pickKey(rng, tonic, false);
+  // Drill the newest pair where it is weakest, in a major key, unless it can't be sung in this setup.
+  let drillLayouts = layoutsFor(allowed, keysFor(tonic, ['major']), voice);
+  const reached = (l: Layout) => [...l.placements].some(isNewest);
+  if (!drillLayouts.some(reached)) drillLayouts = layoutsFor(allowed, keysFor(tonic, modesFor(p.introduced)), voice);
+  const options = [...new Set(drillLayouts.flatMap((l) => [...l.placements].filter(isNewest)))];
+  if (p.drillsLeft > 0 && options.length) {
+    const layouts = drillLayouts;
+    const lowest = Math.min(...options.map((id) => boxOf(p, id)));
+    const target = pick(rng, options.filter((id) => boxOf(p, id) === lowest));
+    const layout = pickLayout(rng, layouts, target);
     const params: GenParams = {
-      key,
-      range: rangeFor(key),
+      key: layout.key,
+      range: layout.range,
       allowed,
-      weight: (s) => (isNewest(s) ? 12 : 0.6),
-      starts: [0],
+      weight: (s, a, b) => {
+        const id = placementId(s, bandOf(layout.key, a, b));
+        return id === target ? 12 : isNewest(id) ? 4 : 0.6;
+      },
+      starts: [layout.home],
       rhythms: ['q', 'h'],
       meters: [4],
       measures: 3,
     };
-    // Keep the candidate that features the new pair most often.
+    // Keep the candidate that features the new pair, in the target band, most often.
     let best: Exercise | null = null;
-    let bestCount = -1;
+    let bestScore = -1;
     for (let i = 0; i < 12; i++) {
       const ex = generateExercise(params, rng);
-      const count = movesOf(ex).filter(isNewest).length;
-      if (count > bestCount) [best, bestCount] = [ex, count];
+      const moves = movesOf(ex);
+      const score = 3 * moves.filter((id) => id === target).length + moves.filter(isNewest).length;
+      if (score > bestScore) [best, bestScore] = [ex, score];
     }
     const moves = movesOf(best!);
+    const band = splitPlacement(target)[1];
     return {
       kind: 'drill',
       exercise: best!,
       unit: newest,
+      band,
+      home: layout.home,
+      shift: layout.shift,
       syllables: moves.map(() => true),
       focus: moves.map(isNewest),
       tempo: Math.min(tempo, stage.tempo),
       title: `New pair: ${unitName(newest)}`,
-      blurb: unitBlurb(newest),
+      blurb: `${unitBlurb(newest)} This drill sits ${BAND_NAMES[band]}.`,
     };
   }
 
-  const key = pickKey(rng, tonic, p.introduced >= MINOR_AT);
-  const exercise = generateExercise(
-    {
-      key,
-      range: rangeFor(key),
-      allowed,
-      weight: (s) => {
-        const st = p.skills[s];
-        let w = st && st.box > 0 ? (st.box === 1 ? 1.6 : 1) : 2.5;
-        if (!st || p.sung >= st.due) w *= 1.8; // due for review
-        if (isNewest(s)) w *= 2;
-        return w * (1 + 1.5 * missRate(st));
-      },
-      starts: p.introduced >= 6 ? [0, 2, 4, -3] : [0],
-      ...stage,
+  // Centre the song on the placement most in need, then favour needy placements throughout.
+  const layouts = layoutsFor(allowed, keysFor(tonic, modesFor(p.introduced)), voice);
+  const inPlay = [...new Set(layouts.flatMap((l) => [...l.placements]))];
+  const target = inPlay.length ? pick(rng, inPlay, inPlay.map((id) => need(p, id) ** 2)) : null;
+  const layout = target ? pickLayout(rng, layouts, target) : pick(rng, layouts);
+  const params: GenParams = {
+    key: layout.key,
+    range: layout.range,
+    allowed,
+    weight: (s, a, b) => {
+      const id = placementId(s, bandOf(layout.key, a, b));
+      return need(p, id) * (isNewest(id) ? 2 : 1) * (id === target ? 4 : 1);
     },
-    rng,
-  );
+    starts: p.introduced >= 6 ? [0, 2, 4, -3].map((d) => layout.home + d) : [layout.home],
+    ...stage,
+  };
+  let exercise = generateExercise(params, rng);
+  for (let i = 0; target && i < 5 && !movesOf(exercise).includes(target); i++) exercise = generateExercise(params, rng);
   const moves = movesOf(exercise);
-  const young = (s: string | null) => s !== null && isYoung(p, s);
   const syllables = moves.map((into, i) => young(into) || young(moves[i + 1] ?? null));
+  const band = target ? splitPlacement(target)[1] : bandOf(layout.key, layout.home, layout.home);
   return {
     kind: 'song',
     exercise,
     unit: null,
+    band,
+    home: layout.home,
+    shift: layout.shift,
     syllables,
-    focus: moves.map((s) => isNewest(s) && young(s)),
+    focus: moves.map((id) => isNewest(id) && young(id)),
     tempo,
     title: `Song · ${p.introduced} ${p.introduced === 1 ? 'pair' : 'pairs'}`,
-    blurb: syllables.some(Boolean)
-      ? 'Built from the pairs you know. Syllables are printed only for pairs you are still learning.'
-      : 'Built from the pairs you know. Read the shapes alone.',
+    blurb:
+      (syllables.some(Boolean)
+        ? 'Built from the pairs you know. Syllables are printed only where a pair is still new to that part of the staff.'
+        : 'Built from the pairs you know. Read the shapes alone.') + ` This one sits ${BAND_NAMES[band]}.`,
   };
 }
 
@@ -238,10 +386,11 @@ const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 /**
  * Apply a graded lesson. `correct[i]` is whether note i was sung right; a
- * move is credited to its skill when the note it arrives at was right.
+ * move is credited to its placement when the note it arrives at was right.
+ * `setup` decides the placements in play.
  * Returns a new Progress (the input is not mutated).
  */
-export function applyResult(prev: Progress, lesson: Lesson, correct: boolean[]): Outcome {
+export function applyResult(prev: Progress, lesson: Lesson, correct: boolean[], setup: Setup = ANY): Outcome {
   const p: Progress = structuredClone(prev);
   const ex = lesson.exercise;
   const score = correct.filter(Boolean).length / correct.length;
@@ -249,10 +398,10 @@ export function applyResult(prev: Progress, lesson: Lesson, correct: boolean[]):
 
   ex.notes.forEach((n, i) => p.shapes[shapeOf(n.degree, ex.key.mode)][correct[i] ? 'hit' : 'miss']++);
 
-  // Tally each move, then update each skill's box once for this exercise.
+  // Tally each move, then update each placement's box once for this exercise.
   const seen = new Map<string, Tally>();
   movesOf(ex).forEach((s, i) => {
-    if (!s || !unitOfSkill(s)) return;
+    if (!s || !unitOfSkill(splitPlacement(s)[0])) return;
     const key = correct[i] ? 'hit' : 'miss';
     (p.skills[s] ??= { box: 0, due: 0, hit: 0, miss: 0 })[key]++;
     (seen.get(s) ?? seen.set(s, { hit: 0, miss: 0 }).get(s)!)[key]++;
@@ -293,43 +442,44 @@ export function applyResult(prev: Progress, lesson: Lesson, correct: boolean[]):
     if (score >= 0.95) p.tempoFactor = Math.min(TEMPO_MAX, p.tempoFactor + 0.05);
     else if (score < 0.7) p.tempoFactor = Math.max(TEMPO_MIN, p.tempoFactor - 0.05);
 
-    const known = [...knownSkills(p)];
-    const shaky = known.filter((s) => p.skills[s] && boxOf(p, s) === 0).length;
+    const unsolid = unsolidPlacements(p, setup).length;
     const recent = p.recent.slice(-WINDOW);
-    const ready =
-      p.introduced < UNITS.length &&
-      [newest.up, newest.down].every((s) => boxOf(p, s) >= STABLE_BOX) &&
-      recent.length >= WINDOW &&
-      avg(recent) >= INTRODUCE_AT &&
-      shaky <= Math.max(1, Math.floor(0.15 * known.length));
+    const ready = p.introduced < UNITS.length && unsolid === 0 && recent.length >= WINDOW && avg(recent) >= INTRODUCE_AT;
 
     if (ready) {
       change = 'introduce';
       p.introduced++;
-      p.drillsLeft = DRILLS_PER_UNIT;
       p.drillTries = 0;
       p.recent = [];
       const u = newestUnit(p);
-      parts.push(`Well sung! New pair: ${unitName(u)}. ${unitBlurb(u)}`);
+      const singable = [...placementsInPlay(p, setup)].some((id) => unitOfSkill(splitPlacement(id)[0]) === u);
+      p.drillsLeft = singable ? DRILLS_PER_UNIT : 0;
+      parts.push(
+        singable
+          ? `Well sung! New pair: ${unitName(u)}. ${unitBlurb(u)}`
+          : `Well sung! The next pair, ${unitName(u)}, doesn't fit your range in this key yet, so on we go.`,
+      );
     } else {
       parts.push(score === 1 ? 'Clean!' : score >= 0.75 ? 'Good.' : 'That one was tricky; slowing down a little.');
-      const weak = weakestSkill(p);
-      if (weak) parts.push(`${describeSkill(weak)} is your weak spot, so you'll see it more.`);
+      const weak = weakestPlacement(p);
+      if (weak) parts.push(`${describePlacement(weak)} is your weak spot, so you'll see it more.`);
+      else if (unsolid && p.introduced < UNITS.length)
+        parts.push(`${unsolid} ${unsolid === 1 ? 'placement' : 'placements'} on the staff to make solid before the next pair.`);
     }
   }
 
   return { progress: p, score, change, message: parts.join(' ') };
 }
 
-/** The known skill (with enough data) that is missed most, if it's missed often. */
-export function weakestSkill(p: Progress): string | null {
+/** The placement of a known pair (with enough data) that is missed most, if it's missed often. */
+export function weakestPlacement(p: Progress): string | null {
+  const known = knownSkills(p);
   let worst: string | null = null;
   let worstRate = 0.25;
-  for (const s of knownSkills(p)) {
-    const t = p.skills[s];
-    if (!t || t.hit + t.miss < 4) continue;
+  for (const [id, t] of Object.entries(p.skills)) {
+    if (!known.has(splitPlacement(id)[0]) || t.hit + t.miss < 4) continue;
     const rate = t.miss / (t.hit + t.miss);
-    if (rate > worstRate) [worst, worstRate] = [s, rate];
+    if (rate > worstRate) [worst, worstRate] = [id, rate];
   }
   return worst;
 }
