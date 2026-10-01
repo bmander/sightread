@@ -5,6 +5,8 @@ scroll past a playhead in time with a metronome and you sing them. In sing-it
 mode the microphone grades each note. Otherwise you mark the notes you missed
 yourself. An adaptive teacher uses those marks to choose the next exercise.
 
+Try it at https://bmander.github.io/sightread/ (pushes to `main` deploy there).
+
 ```sh
 npm install
 npm run dev     # http://localhost:5173
